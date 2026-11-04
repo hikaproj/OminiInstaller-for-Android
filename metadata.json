@@ -1,0 +1,6 @@
+{
+  "name": "OmniInstaller",
+  "description": "万能インストーラー＆アプリ管理ツール。単体/分割APK、XAPK、アプリバンドルの導入、GitHub連携アプリストア、PC遠隔インストール、詳細バックアップ＆復元、ルート最適化に対応。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">OmniInstaller</string>
+    <string name="tab_installer">インストーラー</string>
+    <string name="tab_store">アプリストア</string>
+    <string name="tab_apps">アプリ管理</string>
+    <string name="tab_remote">PC遠隔導入</string>
+    <string name="tab_tools">最適化・復元</string>
+</resources>
