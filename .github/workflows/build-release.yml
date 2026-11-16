@@ -61,6 +61,16 @@ jobs:
         run: |
           ./gradlew assembleRelease -x lintVitalRelease --stacktrace
 
+      - name: Rename Release APK
+        run: |
+          VERSION_TAG="1.0.${{ github.run_number }}"
+          for f in app/build/outputs/apk/release/*.apk; do
+            if [ -f "$f" ]; then
+              cp "$f" "app/build/outputs/apk/release/hikaproj-ominiinstaller-v${VERSION_TAG}.apk"
+              break
+            fi
+          done
+
       - name: Clean up temporary keystore
         if: always()
         run: rm -f my-upload-key.jks
@@ -72,4 +82,4 @@ jobs:
           name: Release v1.0.${{ github.run_number }}
           generate_release_notes: true
           files: |
-            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/release/hikaproj-ominiinstaller-v*.apk

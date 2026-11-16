@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,9 +22,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CleaningServices
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DeviceHub
-import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Security
@@ -32,10 +33,11 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -49,17 +51,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.BackupArchiveItem
+import com.example.model.BackupExportFormat
 import com.example.ui.MainViewModel
 import com.example.ui.components.AppHeader
 import com.example.ui.theme.AccentDanger
 import com.example.ui.theme.AccentRoot
-import com.example.ui.theme.AccentSuccess
 import com.example.ui.theme.JetBrainsMono
 import com.example.ui.theme.TechPrimary
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ToolsOptimizerScreen(
   viewModel: MainViewModel,
@@ -68,6 +71,9 @@ fun ToolsOptimizerScreen(
   val optState by viewModel.optimizationState.collectAsState()
   val backups by viewModel.backupsList.collectAsState()
   val isOptimizing by viewModel.isOptimizing.collectAsState()
+  val selectedBackupFormat by viewModel.selectedBackupFormat.collectAsState()
+
+  val allExportFormats = remember { BackupExportFormat.values().toList() }
 
   LazyColumn(
     modifier = modifier
@@ -77,7 +83,7 @@ fun ToolsOptimizerScreen(
     item {
       AppHeader(
         title = "最適化・復元センター",
-        subtitle = "Root適応最適化、キャッシュ掃除、アーカイブ復元管理",
+        subtitle = "24種類のバックアップ書き出し形式・Root適応最適化・開発者: Hikaproj",
         isRooted = optState.isRooted,
         trailingContent = {
           IconButton(onClick = {
@@ -159,13 +165,63 @@ fun ToolsOptimizerScreen(
           Spacer(modifier = Modifier.height(12.dp))
           Text(
             text = if (optState.isRooted) {
-              "特権機能がアンロックされています: サイレントインストール・削除、ART/DEX Speed事前コンパイル、システム全体のキャシュトリムが利用可能です。"
+              "特権機能がアンロックされています: サイレントインストール・削除、ART/DEX Speed事前コンパイル、システム全体のキャッシュトリムが利用可能です。"
             } else {
-              "標準環境に最適化されています: OS標準の確認ダイアログ付きPackageInstallerセッション、内部キャッシュの高速整理、安全なバックアップ/リストアを実行できます。"
+              "標準環境に最適化されています: OS標準の確認ダイアログ付きPackageInstallerセッション、内部キャッシュの高速整理、24形式の安全なバックアップ/リストアを実行できます。"
             },
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
           )
+        }
+      }
+    }
+
+    // 24+ Backup Export Format Selector Card
+    item {
+      Card(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 20.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+      ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+          Text(
+            text = "バックアップアーカイブ書き出し形式 (${allExportFormats.size} 種類対応)",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+          )
+          Text(
+            text = "選択中: .${selectedBackupFormat.extension} — ${selectedBackupFormat.description}",
+            fontSize = 12.sp,
+            color = TechPrimary,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(top = 4.dp, bottom = 10.dp)
+          )
+
+          FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+          ) {
+            allExportFormats.forEach { fmt ->
+              FilterChip(
+                selected = selectedBackupFormat == fmt,
+                onClick = { viewModel.setBackupExportFormat(fmt) },
+                label = {
+                  Text(
+                    text = ".${fmt.extension}",
+                    fontSize = 11.sp,
+                    fontFamily = JetBrainsMono
+                  )
+                },
+                shape = RoundedCornerShape(8.dp),
+                colors = FilterChipDefaults.filterChipColors(
+                  selectedContainerColor = TechPrimary.copy(alpha = 0.2f),
+                  selectedLabelColor = TechPrimary
+                )
+              )
+            }
+          }
         }
       }
     }
@@ -233,6 +289,46 @@ fun ToolsOptimizerScreen(
       }
     }
 
+    // Developer Info Card (Hikaproj)
+    item {
+      Card(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 20.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+      ) {
+        Row(
+          modifier = Modifier.padding(16.dp),
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          Box(
+            modifier = Modifier
+              .size(40.dp)
+              .clip(CircleShape)
+              .background(TechPrimary.copy(alpha = 0.15f)),
+            contentAlignment = Alignment.Center
+          ) {
+            Icon(Icons.Default.Code, contentDescription = null, tint = TechPrimary)
+          }
+          Spacer(modifier = Modifier.width(12.dp))
+          Column {
+            Text(
+              text = "OmniInstaller — 開発者: Hikaproj",
+              style = MaterialTheme.typography.titleSmall,
+              fontWeight = FontWeight.Bold
+            )
+            Text(
+              text = "ビルドパッケージ名: hikaproj-ominiinstaller-v1.0.apk • URIスキーム: hpjominii://",
+              fontSize = 11.sp,
+              fontFamily = JetBrainsMono,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
+        }
+      }
+    }
+
     // Backup & Restore Section Header
     item {
       Row(
@@ -273,7 +369,7 @@ fun ToolsOptimizerScreen(
               color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-              text = "「アプリ管理」タブからアプリを選択してバックアップを作成できます。",
+              text = "「アプリ管理」タブから任意の形式でバックアップを作成できます。",
               fontSize = 12.sp,
               color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
             )
@@ -319,11 +415,27 @@ fun BackupItemCard(
         verticalAlignment = Alignment.CenterVertically
       ) {
         Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = item.appLabel,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
-          )
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+              text = item.appLabel,
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Surface(
+              shape = RoundedCornerShape(4.dp),
+              color = TechPrimary.copy(alpha = 0.15f)
+            ) {
+              Text(
+                text = ".${item.exportFormat.extension}",
+                fontSize = 10.sp,
+                fontFamily = JetBrainsMono,
+                fontWeight = FontWeight.Bold,
+                color = TechPrimary,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+              )
+            }
+          }
           Text(
             text = item.packageName,
             fontSize = 11.sp,
@@ -341,13 +453,13 @@ fun BackupItemCard(
         if (item.splitCount > 1) {
           Surface(
             shape = RoundedCornerShape(4.dp),
-            color = TechPrimary.copy(alpha = 0.15f)
+            color = MaterialTheme.colorScheme.surfaceVariant
           ) {
             Text(
               text = "${item.splitCount} APKs",
               fontSize = 10.sp,
               fontFamily = JetBrainsMono,
-              color = TechPrimary,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
               modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
             )
           }

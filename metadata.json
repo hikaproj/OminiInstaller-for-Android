@@ -1,6 +1,6 @@
 {
   "name": "OmniInstaller",
-  "description": "万能インストーラー＆アプリ管理ツール。単体/分割APK、XAPK、アプリバンドルの導入、GitHub連携アプリストア、PC遠隔インストール、詳細バックアップ＆復元、ルート最適化に対応。",
+  "description": "開発者: Hikaproj — 25種以上のパッケージ形式・複数APK・直リンク導入に対応した万能インストーラー。hpjominii://対応アプリストア、24形式のバックアップ＆復元、ポート変更＆Cloudflare Tunnel対応のPC遠隔導入機能を搭載。",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

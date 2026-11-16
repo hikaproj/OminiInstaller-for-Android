@@ -5,8 +5,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.Settings
 import android.util.Log
 import com.example.model.ApkArchiveInfo
 import com.example.model.ArchiveFormat
@@ -54,6 +56,15 @@ object PackageInstallerManager {
     _sessionState.value = InstallSessionState()
   }
 
+  fun updateProgress(status: InstallStatus, progress: Float, task: String, error: String? = null) {
+    _sessionState.value = _sessionState.value.copy(
+      status = status,
+      progress = progress,
+      currentTask = task,
+      errorDetails = error
+    )
+  }
+
   suspend fun installPackage(
     context: Context,
     archiveInfo: ApkArchiveInfo,
@@ -75,7 +86,7 @@ object PackageInstallerManager {
           progress = 0.15f,
           currentTask = "OBBデータファイルを展開・配置中..."
         )
-        copyObbFiles(context, archiveInfo)
+        copyObbFiles(archiveInfo)
       }
 
       // 2. Perform installation depending on root option
@@ -94,7 +105,7 @@ object PackageInstallerManager {
     }
   }
 
-  private fun copyObbFiles(context: Context, archiveInfo: ApkArchiveInfo) {
+  private fun copyObbFiles(archiveInfo: ApkArchiveInfo) {
     try {
       val obbBaseDir = File(Environment.getExternalStorageDirectory(), "Android/obb/${archiveInfo.packageName}")
       obbBaseDir.mkdirs()
@@ -115,12 +126,11 @@ object PackageInstallerManager {
 
   private suspend fun installWithPackageInstaller(context: Context, archiveInfo: ApkArchiveInfo) =
     withContext(Dispatchers.IO) {
-      // Check REQUEST_INSTALL_PACKAGES permission on Android 8.0+
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         if (!context.packageManager.canRequestPackageInstalls()) {
           try {
-            val settingsIntent = Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
-              data = android.net.Uri.parse("package:${context.packageName}")
+            val settingsIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+              data = Uri.parse("package:${context.packageName}")
               addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(settingsIntent)
@@ -136,9 +146,62 @@ object PackageInstallerManager {
         }
       }
 
+      data class FileToWrite(val file: File, val entryName: String)
+      val filesToInstall = mutableListOf<FileToWrite>()
+      val usedEntryNames = mutableSetOf<String>()
+
+      val sourceFileOrDir = File(archiveInfo.filePath)
+      if (sourceFileOrDir.isFile) {
+        filesToInstall.add(FileToWrite(sourceFileOrDir, "base.apk"))
+      } else if (sourceFileOrDir.isDirectory) {
+        for ((idx, split) in archiveInfo.splits.withIndex()) {
+          val f = if (split.filePath.isNotBlank() && File(split.filePath).exists()) {
+            File(split.filePath)
+          } else {
+            File(sourceFileOrDir, split.name)
+          }
+          if (f.exists() && f.isFile && f.length() > 0) {
+            var candidateName = if (split.isBase) {
+              "base.apk"
+            } else {
+              val clean = split.name.substringAfter("_").replace("[^a-zA-Z0-9_.-]".toRegex(), "_")
+              if (clean.endsWith(".apk", ignoreCase = true)) clean else "$clean.apk"
+            }
+            if (usedEntryNames.contains(candidateName)) {
+              candidateName = "split_${idx}_$candidateName"
+            }
+            usedEntryNames.add(candidateName)
+            filesToInstall.add(FileToWrite(f, candidateName))
+          }
+        }
+
+        // Fallback if splits list didn't resolve files
+        if (filesToInstall.isEmpty()) {
+          sourceFileOrDir.listFiles { f -> f.isFile && f.name.endsWith(".apk", ignoreCase = true) }
+            ?.sortedByDescending { it.length() }
+            ?.forEachIndexed { idx, f ->
+              val entryName = if (idx == 0) "base.apk" else "split_${idx}_${f.name.replace("[^a-zA-Z0-9_.-]".toRegex(), "_")}"
+              filesToInstall.add(FileToWrite(f, entryName))
+            }
+        }
+      }
+
+      if (filesToInstall.isEmpty()) {
+        throw IllegalStateException("インストール可能なAPKモジュールが見つかりませんでした。")
+      }
+
+      val exactTotalBytes = filesToInstall.sumOf { it.file.length() }
+
       val packageInstaller = context.packageManager.packageInstaller
       val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
-        if (archiveInfo.packageName.isNotBlank() && !archiveInfo.packageName.startsWith("unknown") && !archiveInfo.packageName.startsWith("com.bundle")) {
+        // Do NOT force setAppPackageName if it could mismatch a split or inner base package name;
+        // only set when verified valid package identifier
+        if (
+          archiveInfo.packageName.isNotBlank() &&
+          archiveInfo.packageName.contains(".") &&
+          !archiveInfo.packageName.startsWith("unknown") &&
+          !archiveInfo.packageName.startsWith("com.bundle")
+        ) {
           setAppPackageName(archiveInfo.packageName)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -150,8 +213,8 @@ object PackageInstallerManager {
         if (archiveInfo.appLabel.isNotBlank()) {
           setAppLabel(archiveInfo.appLabel)
         }
-        if (archiveInfo.totalSizeBytes > 0) {
-          setSize(archiveInfo.totalSizeBytes)
+        if (exactTotalBytes > 0) {
+          setSize(exactTotalBytes)
         }
       }
 
@@ -160,52 +223,21 @@ object PackageInstallerManager {
 
       try {
         _sessionState.value = _sessionState.value.copy(
-          progress = 0.3f,
-          currentTask = "APKストリーム書き込み中..."
+          progress = 0.25f,
+          currentTask = "APKストリーム書き込み中 (全${filesToInstall.size}モジュール)..."
         )
-
-        data class FileToWrite(val file: File, val entryName: String)
-        val filesToInstall = mutableListOf<FileToWrite>()
-
-        if (archiveInfo.format == ArchiveFormat.APK) {
-          val f = File(archiveInfo.filePath)
-          if (f.exists()) {
-            filesToInstall.add(FileToWrite(f, "base.apk"))
-          }
-        } else {
-          val dir = File(archiveInfo.filePath)
-          for (split in archiveInfo.splits) {
-            val f = File(dir, split.name)
-            if (f.exists()) {
-              val entryName = if (split.isBase) "base.apk" else split.name.replace("[^a-zA-Z0-9_.-]".toRegex(), "_")
-              filesToInstall.add(FileToWrite(f, entryName))
-            }
-          }
-          // Fallback if splits list was empty
-          if (filesToInstall.isEmpty() && dir.isDirectory) {
-            dir.listFiles { f -> f.name.endsWith(".apk", ignoreCase = true) }?.forEachIndexed { idx, f ->
-              val isBase = idx == 0 || f.name.contains("base", ignoreCase = true)
-              val entryName = if (isBase) "base.apk" else f.name.replace("[^a-zA-Z0-9_.-]".toRegex(), "_")
-              filesToInstall.add(FileToWrite(f, entryName))
-            }
-          }
-        }
-
-        if (filesToInstall.isEmpty()) {
-          throw IllegalStateException("インストール可能なAPKファイルが見つかりませんでした。")
-        }
 
         val totalFiles = filesToInstall.size
         filesToInstall.forEachIndexed { index, item ->
           _sessionState.value = _sessionState.value.copy(
-            progress = 0.3f + (0.5f * (index + 1) / totalFiles),
-            currentTask = "書き込み中: ${item.file.name}"
+            progress = 0.25f + (0.55f * (index + 1) / totalFiles),
+            currentTask = "書き込み中 (${index + 1}/$totalFiles): ${item.entryName}"
           )
 
           session.openWrite(item.entryName, 0, item.file.length()).use { out ->
             FileInputStream(item.file).use { inStream ->
               val buffer = ByteArray(65536)
-              var bytesRead = 0
+              var bytesRead: Int
               while (inStream.read(buffer).also { bytesRead = it } != -1) {
                 out.write(buffer, 0, bytesRead)
               }
@@ -219,9 +251,9 @@ object PackageInstallerManager {
           currentTask = "システムへコミット中..."
         )
 
-        // Create PendingIntent to trigger InstallStatusReceiver with explicit action
         val callbackIntent = Intent(context, InstallStatusReceiver::class.java).apply {
           action = "com.example.ACTION_INSTALL_STATUS"
+          setPackage(context.packageName)
           putExtra(PackageInstaller.EXTRA_PACKAGE_NAME, archiveInfo.packageName)
         }
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -241,7 +273,7 @@ object PackageInstallerManager {
 
         _sessionState.value = _sessionState.value.copy(
           progress = 0.95f,
-          currentTask = "システムの承認待機中 (画面の指示に従ってください)..."
+          currentTask = "システムの承認待機中 (インストール確認ダイアログで許可してください)..."
         )
       } catch (e: Exception) {
         session.abandon()
@@ -256,27 +288,30 @@ object PackageInstallerManager {
         currentTask = "Root権限でサイレントインストール実行中..."
       )
 
-      if (archiveInfo.format == ArchiveFormat.APK) {
-        val result = RootHelper.runSu("pm install -r \"${archiveInfo.filePath}\"")
+      val sourceFileOrDir = File(archiveInfo.filePath)
+      if (sourceFileOrDir.isFile) {
+        val result = RootHelper.runSu("pm install -r -d \"${sourceFileOrDir.absolutePath}\"")
         if (result.success && result.output.contains("Success", ignoreCase = true)) {
           notifyInstallResult(true, archiveInfo.packageName, "Rootサイレントインストールに成功しました")
         } else {
-          // Fallback to PackageInstaller if su returned non-success
           notifyInstallResult(false, archiveInfo.packageName, "Rootインストールエラー: ${result.output}")
         }
       } else {
-        // Multi-apk split install using pm install-create
-        val createCmd = RootHelper.runSu("pm install-create -r")
+        val createCmd = RootHelper.runSu("pm install-create -r -d")
         val output = createCmd.output
         val sessionIdMatch = Regex("""\[(\d+)\]""").find(output) ?: Regex("""(\d+)""").find(output)
         val sessionId = sessionIdMatch?.groupValues?.get(1)
 
         if (sessionId != null) {
-          val dir = File(archiveInfo.filePath)
-          for (split in archiveInfo.splits) {
-            val file = File(dir, split.name)
+          for ((idx, split) in archiveInfo.splits.withIndex()) {
+            val file = if (split.filePath.isNotBlank() && File(split.filePath).exists()) {
+              File(split.filePath)
+            } else {
+              File(sourceFileOrDir, split.name)
+            }
             if (file.exists()) {
-              RootHelper.runSu("pm install-write -S ${file.length()} $sessionId ${split.name} \"${file.absolutePath}\"")
+              val entryName = if (split.isBase) "base.apk" else "split_${idx}_${split.name.replace("[^a-zA-Z0-9_.-]".toRegex(), "_")}"
+              RootHelper.runSu("pm install-write -S ${file.length()} $sessionId $entryName \"${file.absolutePath}\"")
             }
           }
           val commitResult = RootHelper.runSu("pm install-commit $sessionId")

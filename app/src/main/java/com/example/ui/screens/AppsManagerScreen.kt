@@ -22,24 +22,18 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SelectAll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -63,16 +57,14 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.model.BackupExportFormat
 import com.example.model.InstalledAppItem
 import com.example.ui.AppsFilter
 import com.example.ui.MainViewModel
@@ -97,8 +89,8 @@ fun AppsManagerScreen(
   val selectedPackages by viewModel.selectedPackages.collectAsState()
   val inspectingApp by viewModel.inspectingApp.collectAsState()
   val optState by viewModel.optimizationState.collectAsState()
+  val selectedBackupFormat by viewModel.selectedBackupFormat.collectAsState()
 
-  // Filter apps
   val filteredApps = apps.filter { app ->
     val matchFilter = when (currentFilter) {
       AppsFilter.USER -> !app.isSystemApp
@@ -112,15 +104,17 @@ fun AppsManagerScreen(
     matchFilter && matchSearch
   }
 
+  val exportFormats = remember { BackupExportFormat.values().toList() }
+
   Box(modifier = modifier.fillMaxSize()) {
     Column(
       modifier = Modifier
         .fillMaxSize()
-        .padding(bottom = if (selectedPackages.isNotEmpty()) 80.dp else 16.dp)
+        .padding(bottom = if (selectedPackages.isNotEmpty()) 96.dp else 16.dp)
     ) {
       AppHeader(
         title = "アプリ一括・権限管理",
-        subtitle = "端末内全アプリの分割APK解析、権限監査、一括バックアップ＆削除",
+        subtitle = "分割APK解析、権限監査、24形式対応バックアップ＆一括削除",
         isRooted = optState.isRooted,
         trailingContent = {
           IconButton(onClick = { viewModel.refreshInstalledApps() }) {
@@ -145,7 +139,7 @@ fun AppsManagerScreen(
       LazyRow(
         modifier = Modifier
           .fillMaxWidth()
-          .padding(horizontal = 20.dp, vertical = 6.dp),
+          .padding(horizontal = 20.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
       ) {
         items(AppsFilter.values()) { filter ->
@@ -162,11 +156,42 @@ fun AppsManagerScreen(
         }
       }
 
+      // Quick Backup Export Format Row (24 formats)
+      LazyRow(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 20.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        item {
+          Text(
+            text = "書き出し形式:",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(end = 4.dp)
+          )
+        }
+        items(exportFormats) { fmt ->
+          FilterChip(
+            selected = selectedBackupFormat == fmt,
+            onClick = { viewModel.setBackupExportFormat(fmt) },
+            label = { Text(".${fmt.extension}", fontSize = 10.sp, fontFamily = JetBrainsMono) },
+            shape = RoundedCornerShape(6.dp),
+            colors = FilterChipDefaults.filterChipColors(
+              selectedContainerColor = TechPrimary.copy(alpha = 0.2f),
+              selectedLabelColor = TechPrimary
+            )
+          )
+        }
+      }
+
       // App counts and select all toggle
       Row(
         modifier = Modifier
           .fillMaxWidth()
-          .padding(horizontal = 20.dp, vertical = 6.dp),
+          .padding(horizontal = 20.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
       ) {
@@ -252,23 +277,31 @@ fun AppsManagerScreen(
           horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.CenterVertically
         ) {
-          Text(
-            text = "${selectedPackages.size} 件選択中",
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = JetBrainsMono,
-            color = MaterialTheme.colorScheme.onSurface
-          )
+          Column {
+            Text(
+              text = "${selectedPackages.size} 件選択中",
+              fontSize = 14.sp,
+              fontWeight = FontWeight.Bold,
+              fontFamily = JetBrainsMono,
+              color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+              text = "形式: .${selectedBackupFormat.extension}",
+              fontSize = 10.sp,
+              fontFamily = JetBrainsMono,
+              color = TechPrimary
+            )
+          }
 
           Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-              onClick = { viewModel.batchBackupSelected(backupDataWithRoot = false) },
+              onClick = { viewModel.batchBackupSelected(backupDataWithRoot = false, format = selectedBackupFormat) },
               shape = RoundedCornerShape(12.dp),
               colors = ButtonDefaults.buttonColors(containerColor = TechPrimary)
             ) {
               Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(16.dp))
               Spacer(modifier = Modifier.width(6.dp))
-              Text("一括バックアップ", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+              Text("一括書き出し (.${selectedBackupFormat.extension})", fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
 
             OutlinedButton(
@@ -277,8 +310,8 @@ fun AppsManagerScreen(
               colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentDanger)
             ) {
               Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-              Spacer(modifier = Modifier.width(6.dp))
-              Text("一括アンインストール", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+              Spacer(modifier = Modifier.width(4.dp))
+              Text("削除", fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
           }
         }
@@ -290,9 +323,11 @@ fun AppsManagerScreen(
       AppDetailsBottomSheet(
         app = app,
         isRootAvailable = optState.isRooted,
+        selectedFormat = selectedBackupFormat,
+        onSelectFormat = { viewModel.setBackupExportFormat(it) },
         onDismiss = { viewModel.inspectApp(null) },
-        onBackupSingle = {
-          viewModel.backupSingleApp(app.packageName)
+        onBackupSingle = { fmt ->
+          viewModel.backupSingleApp(app.packageName, format = fmt)
           viewModel.inspectApp(null)
         },
         onUninstallSingle = {
@@ -399,7 +434,6 @@ fun InstalledAppCard(
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
 
-          // Sensitive permission indicators count
           val dangerousCount = app.permissions.count { it.isDangerous && it.isGranted }
           if (dangerousCount > 0) {
             Spacer(modifier = Modifier.width(8.dp))
@@ -421,13 +455,16 @@ fun InstalledAppCard(
 fun AppDetailsBottomSheet(
   app: InstalledAppItem,
   isRootAvailable: Boolean,
+  selectedFormat: BackupExportFormat,
+  onSelectFormat: (BackupExportFormat) -> Unit,
   onDismiss: () -> Unit,
-  onBackupSingle: () -> Unit,
+  onBackupSingle: (BackupExportFormat) -> Unit,
   onUninstallSingle: () -> Unit,
   onOptimizeArt: () -> Unit,
   onOpenSettings: () -> Unit
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+  val allFormats = remember { BackupExportFormat.values().toList() }
 
   ModalBottomSheet(
     onDismissRequest = onDismiss,
@@ -463,7 +500,34 @@ fun AppDetailsBottomSheet(
         }
       }
 
-      Spacer(modifier = Modifier.height(16.dp))
+      Spacer(modifier = Modifier.height(12.dp))
+
+      // Export Format Picker inside Sheet
+      Text(
+        text = "バックアップ書き出し形式を選択 (24形式):",
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold
+      )
+      Spacer(modifier = Modifier.height(6.dp))
+      FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+      ) {
+        allFormats.forEach { fmt ->
+          FilterChip(
+            selected = selectedFormat == fmt,
+            onClick = { onSelectFormat(fmt) },
+            label = { Text(".${fmt.extension}", fontSize = 10.sp, fontFamily = JetBrainsMono) },
+            shape = RoundedCornerShape(6.dp),
+            colors = FilterChipDefaults.filterChipColors(
+              selectedContainerColor = TechPrimary.copy(alpha = 0.2f),
+              selectedLabelColor = TechPrimary
+            )
+          )
+        }
+      }
+
+      Spacer(modifier = Modifier.height(12.dp))
 
       // Action buttons row
       Row(
@@ -471,13 +535,13 @@ fun AppDetailsBottomSheet(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
       ) {
         Button(
-          onClick = onBackupSingle,
-          modifier = Modifier.weight(1f),
+          onClick = { onBackupSingle(selectedFormat) },
+          modifier = Modifier.weight(1.3f),
           shape = RoundedCornerShape(12.dp)
         ) {
           Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(16.dp))
           Spacer(modifier = Modifier.width(6.dp))
-          Text("APK抽出", fontSize = 12.sp)
+          Text(".${selectedFormat.extension} で抽出", fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
 
         OutlinedButton(
@@ -485,19 +549,19 @@ fun AppDetailsBottomSheet(
           modifier = Modifier.weight(1f),
           shape = RoundedCornerShape(12.dp)
         ) {
-          Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+          Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
           Spacer(modifier = Modifier.width(6.dp))
           Text("OS設定", fontSize = 12.sp)
         }
 
         OutlinedButton(
           onClick = onUninstallSingle,
-          modifier = Modifier.weight(1f),
+          modifier = Modifier.weight(0.9f),
           shape = RoundedCornerShape(12.dp),
           colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentDanger)
         ) {
           Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-          Spacer(modifier = Modifier.width(6.dp))
+          Spacer(modifier = Modifier.width(4.dp))
           Text("削除", fontSize = 12.sp)
         }
       }
@@ -558,7 +622,6 @@ fun AppDetailsBottomSheet(
       if (app.permissions.isEmpty()) {
         Text("宣言された権限はありません。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
       } else {
-        // Group by category
         val grouped = app.permissions.groupBy { it.group }
         grouped.forEach { (group, perms) ->
           Surface(

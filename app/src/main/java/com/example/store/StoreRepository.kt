@@ -5,6 +5,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import com.example.model.StoreAppItem
+import com.example.model.StoreReleaseVersion
+import com.example.model.StoreRepositorySource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -16,6 +18,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.net.URLDecoder
 import java.util.concurrent.TimeUnit
 
 object StoreRepository {
@@ -24,54 +27,129 @@ object StoreRepository {
 
   private val client = OkHttpClient.Builder()
     .connectTimeout(15, TimeUnit.SECONDS)
-    .readTimeout(30, TimeUnit.SECONDS)
+    .readTimeout(45, TimeUnit.SECONDS)
+    .followRedirects(true)
+    .followSslRedirects(true)
     .build()
 
-  // Curated prominent open-source apps with GitHub releases
+  private val supportedAssetExtensions = listOf(
+    ".apk", ".xapk", ".apks", ".apkm", ".omni", ".hpjpkg",
+    ".zapk", ".sapk", ".mapk", ".bapk", ".apk+", ".apex",
+    ".tar.gz", ".tgz", ".apk.gz", ".tar", ".zip"
+  )
+
+  val defaultRepositories = listOf(
+    StoreRepositorySource(
+      id = "hikaproj_official",
+      name = "Hikaproj Official Curated Index",
+      url = "https://github.com/hikaproj/omniinstaller-index",
+      description = "Hikaproj 公式厳選オープンソースアプリカタログ (大規模マルチカテゴリ対応)",
+      appCount = 12,
+      lastSynced = "初期組込済",
+      isOfficial = true
+    ),
+    StoreRepositorySource(
+      id = "github_direct",
+      name = "GitHub Releases Bridge",
+      url = "https://api.github.com",
+      description = "GitHub 上の任意のリポジトリから最新 APK / XAPK / APKS を直接取得",
+      appCount = 0,
+      lastSynced = "オンライン",
+      isOfficial = true
+    )
+  )
+
+  // Rich curated open-source apps with full metadata & version history
   val defaultCuratedApps = listOf(
     StoreAppItem(
       id = "newpipe",
       name = "NewPipe",
       packageName = "org.schabi.newpipe",
       summary = "軽量・広告なし・バックグラウンド再生対応のYouTube/メディアクライアント",
+      description = "NewPipe は Google Play 開発者サービスや YouTube API に依存せず、ウェブサイトを直接解析して動作するプライバシー重視の軽量メディアストリーミングフロントエンドです。\n\n• バックグラウンド再生およびピクチャ・イン・ピクチャ (PiP) 対応\n• 動画・音声・字幕のローカルダウンロード機能\n• SoundCloud、PeerTube、Bandcamp、media.ccc.de などの複数サービスに対応\n• サブスクリプションのローカル管理とインポート/エクスポート",
       category = "メディア",
       author = "TeamNewPipe",
       iconUrl = "https://raw.githubusercontent.com/TeamNewPipe/NewPipe/dev/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
       githubRepo = "TeamNewPipe/NewPipe",
+      websiteUrl = "https://newpipe.net",
+      sourceRepoName = "Hikaproj Official Curated Index",
+      license = "GPL-3.0",
+      minSdk = 21,
+      architecture = "Universal (arm64-v8a / armeabi-v7a / x86_64)",
       latestVersion = "v0.27.2",
       downloadUrl = "https://github.com/TeamNewPipe/NewPipe/releases/download/v0.27.2/NewPipe_v0.27.2.apk",
       sizeBytes = 11_500_000L,
-      releaseNotes = "最新のストリーミング修正およびパフォーマンス最適化。",
-      releaseDate = "2024-10-15"
+      releaseNotes = "最新のストリーミング復号化修正、プレイヤーUI改善、およびパフォーマンス最適化。",
+      releaseDate = "2024-10-15",
+      versions = listOf(
+        StoreReleaseVersion(
+          versionName = "v0.27.2",
+          downloadUrl = "https://github.com/TeamNewPipe/NewPipe/releases/download/v0.27.2/NewPipe_v0.27.2.apk",
+          sizeBytes = 11_500_000L,
+          releaseDate = "2024-10-15",
+          changelog = "最新のストリーミング復号化修正と安定性向上",
+          abi = "Universal"
+        ),
+        StoreReleaseVersion(
+          versionName = "v0.27.1",
+          downloadUrl = "https://github.com/TeamNewPipe/NewPipe/releases/download/v0.27.1/NewPipe_v0.27.1.apk",
+          sizeBytes = 11_400_000L,
+          releaseDate = "2024-07-24",
+          changelog = "YouTube ストリーム抽出エラーの緊急修正",
+          abi = "Universal"
+        )
+      )
     ),
     StoreAppItem(
       id = "revanced_mgr",
       name = "ReVanced Manager",
       packageName = "app.revanced.manager.flutter",
       summary = "各種Androidアプリに自由なパッチを適用できるオープンソースマネージャー",
+      description = "ReVanced Manager は Android アプリケーションに対してモジュラー形式のパッチを適用し、広告ブロック、テーマ変更、カスタム機能追加などを行える公式パッチャーです。\n\n• Root 環境（マウント方式）および非 Root 環境（再署名 APK 生成方式）の両対応\n• 外部パッチソースのカスタム追加機能\n• パッチ適用済み APK のエクスポートと直接インストール連携",
       category = "ユーティリティ",
       author = "ReVanced",
       iconUrl = "https://raw.githubusercontent.com/ReVanced/revanced-manager/main/assets/branding/icon.png",
       githubRepo = "ReVanced/revanced-manager",
+      websiteUrl = "https://revanced.app",
+      sourceRepoName = "Hikaproj Official Curated Index",
+      license = "GPL-3.0",
+      minSdk = 26,
+      architecture = "Universal",
       latestVersion = "v1.21.1",
       downloadUrl = "https://github.com/ReVanced/revanced-manager/releases/download/v1.21.1/revanced-manager-v1.21.1.apk",
       sizeBytes = 36_000_000L,
       releaseNotes = "パッチ統合UIの改良とルート/非ルート環境への適応強化。",
-      releaseDate = "2024-09-28"
+      releaseDate = "2024-09-28",
+      versions = listOf(
+        StoreReleaseVersion(
+          versionName = "v1.21.1",
+          downloadUrl = "https://github.com/ReVanced/revanced-manager/releases/download/v1.21.1/revanced-manager-v1.21.1.apk",
+          sizeBytes = 36_000_000L,
+          releaseDate = "2024-09-28",
+          changelog = "パッチ選択画面の高速化とメモリ使用量削減",
+          abi = "Universal"
+        )
+      )
     ),
     StoreAppItem(
       id = "mihon",
       name = "Mihon",
       packageName = "eu.kanade.tachiyomi",
       summary = "高機能なオンライン/ローカル漫画リーダー (Tachiyomi後継)",
+      description = "Mihon はオープンソースのコミック・漫画リーダーであり、ローカルアーカイブ (CBZ, ZIP, EPUB, PDF) や外部拡張リポジトリからの閲覧に対応しています。\n\n• 見開き表示、縦スクロール（Webtoon）、右から左/左から右など多彩なビューア設定\n• MyAnimeList、AniList、Kitsu、Shikimori、MangaUpdates とのトラッキング連携\n• 自動バックアップと柔軟なカテゴリ・タグ管理",
       category = "コミック・読書",
       author = "mihonapp",
       iconUrl = "https://raw.githubusercontent.com/mihonapp/mihon/main/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
       githubRepo = "mihonapp/mihon",
+      websiteUrl = "https://mihon.app",
+      sourceRepoName = "Hikaproj Official Curated Index",
+      license = "Apache-2.0",
+      minSdk = 26,
+      architecture = "arm64-v8a / armeabi-v7a / x86_64 / Universal",
       latestVersion = "v0.16.5",
       downloadUrl = "https://github.com/mihonapp/mihon/releases/download/v0.16.5/mihon-v0.16.5.apk",
       sizeBytes = 28_000_000L,
-      releaseNotes = "バックアップ暗号化の強化およびリーダーのレンダリング向上。",
+      releaseNotes = "バックアップ復元の強化およびリーダーのレンダリング向上。",
       releaseDate = "2024-08-10"
     ),
     StoreAppItem(
@@ -79,10 +157,16 @@ object StoreRepository {
       name = "Seal Downloader",
       packageName = "com.junkfood.seal",
       summary = "yt-dlpベースのモダンな動画・音声ダウンローダー",
+      description = "Seal は強力なコマンドラインツール yt-dlp と FFmpeg を内蔵した、Material Design 3 準拠の動画・音声ダウンローダーです。\n\n• 1000以上の動画・音楽サイトからの高画質ダウンロード\n• 音声抽出 (MP3, M4A, Opus) とメタデータ・サムネイル自動埋め込み\n• プレイリスト一括ダウンロードおよびカスタム yt-dlp コマンドテンプレート実行",
       category = "ツール",
       author = "JunkFood02",
       iconUrl = "https://raw.githubusercontent.com/JunkFood02/Seal/main/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
       githubRepo = "JunkFood02/Seal",
+      websiteUrl = "https://github.com/JunkFood02/Seal",
+      sourceRepoName = "Hikaproj Official Curated Index",
+      license = "GPL-3.0",
+      minSdk = 24,
+      architecture = "arm64-v8a / armeabi-v7a / x86_64",
       latestVersion = "v1.12.4",
       downloadUrl = "https://github.com/JunkFood02/Seal/releases/download/v1.12.4/Seal-1.12.4-arm64-v8a-release.apk",
       sizeBytes = 39_000_000L,
@@ -94,10 +178,16 @@ object StoreRepository {
       name = "Termux",
       packageName = "com.termux",
       summary = "ルート権限不要で動作する本格派Linux環境エミュレータ",
+      description = "Termux は Android 上でそのまま動作する強力なターミナルエミュレータおよび Linux パッケージ環境です。\n\n• apt / pkg パッケージマネージャーによる Python, Node.js, Rust, Clang, Git, OpenSSH 等の導入\n• cloudflared (Cloudflare Tunnel) や各種 CLI ツールのビルド・実行環境としても最適\n• Zsh, Bash, Fish シェルおよび Neovim / Emacs / Tmux による本格開発環境",
       category = "開発・ターミナル",
       author = "termux",
       iconUrl = "https://raw.githubusercontent.com/termux/termux-app/master/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
       githubRepo = "termux/termux-app",
+      websiteUrl = "https://termux.dev",
+      sourceRepoName = "Hikaproj Official Curated Index",
+      license = "GPL-3.0",
+      minSdk = 24,
+      architecture = "Universal / arm64-v8a",
       latestVersion = "v0.118.1",
       downloadUrl = "https://github.com/termux/termux-app/releases/download/v0.118.1/termux-app_v0.118.1+github-debug_universal.apk",
       sizeBytes = 98_000_000L,
@@ -109,96 +199,292 @@ object StoreRepository {
       name = "Aegis Authenticator",
       packageName = "com.beemdevelopment.aegis",
       summary = "セキュアで暗号化バックアップ対応の2段階認証 (2FA/OTP) アプリ",
+      description = "Aegis Authenticator は無料でオープンソースの2要素認証（TOTP / HOTP / Steam / Yandex）トークン管理アプリです。\n\n• AES-256-GCM によるヴォールト暗号化と生体認証ロック解除\n• 自動バックアップと他社認証アプリ（Google Authenticator, Authy, 2FAS 等）からの簡単インポート\n• アイコンアイデンティティ整理とグループフィルタリング",
       category = "セキュリティ",
       author = "beemdevelopment",
       iconUrl = "https://raw.githubusercontent.com/beemdevelopment/Aegis/master/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
       githubRepo = "beemdevelopment/Aegis",
+      websiteUrl = "https://getaegis.app",
+      sourceRepoName = "Hikaproj Official Curated Index",
+      license = "GPL-3.0",
+      minSdk = 23,
+      architecture = "Universal",
       latestVersion = "v3.1.2",
       downloadUrl = "https://github.com/beemdevelopment/Aegis/releases/download/v3.1.2/aegis-v3.1.2.apk",
       sizeBytes = 19_000_000L,
       releaseNotes = "Material Youダイナミックテーマ、バイオメトリクス保護の安定化。",
       releaseDate = "2024-09-01"
+    ),
+    StoreAppItem(
+      id = "localsend",
+      name = "LocalSend",
+      packageName = "org.localsend.localsend_app",
+      summary = "インターネット不要でローカルLAN内のPC・スマホ間ファイル高速共有",
+      description = "LocalSend は AirDrop のオープンソース・クロスプラットフォーム代替ツールです。外部サーバーを経由せず、Wi-Fi ネットワーク内で暗号化通信を用いて Android, Windows, macOS, Linux, iOS 間でファイルを直接送受信します。",
+      category = "ネットワーク",
+      author = "localsend",
+      iconUrl = "https://raw.githubusercontent.com/localsend/localsend/main/app/assets/img/logo-512.png",
+      githubRepo = "localsend/localsend",
+      websiteUrl = "https://localsend.org",
+      sourceRepoName = "Hikaproj Official Curated Index",
+      license = "MIT",
+      minSdk = 21,
+      architecture = "arm64-v8a / Universal",
+      latestVersion = "v1.15.4",
+      downloadUrl = "https://github.com/localsend/localsend/releases/download/v1.15.4/LocalSend-1.15.4-android-arm64v8.apk",
+      sizeBytes = 21_500_000L,
+      releaseNotes = "フォルダ一括転送の高速化とWeb共有モードの改善。",
+      releaseDate = "2024-08-29"
+    ),
+    StoreAppItem(
+      id = "obtainium",
+      name = "Obtainium",
+      packageName = "dev.imranr.obtainium",
+      summary = "GitHub・GitLab・F-Droid等のリリースページから直接アプリ更新を追跡",
+      description = "Obtainium はオープンソースアプリのリリースページを直接監視し、新しいバージョンが公開された際に通知・導入できるアップデートトラッカーです。OmniInstaller と併用することで強力なパッケージ管理環境を構築できます。",
+      category = "ユーティリティ",
+      author = "ImranR98",
+      iconUrl = "https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/icon_small.png",
+      githubRepo = "ImranR98/Obtainium",
+      websiteUrl = "https://github.com/ImranR98/Obtainium",
+      sourceRepoName = "Hikaproj Official Curated Index",
+      license = "GPL-3.0",
+      minSdk = 21,
+      architecture = "Universal",
+      latestVersion = "v1.1.26",
+      downloadUrl = "https://github.com/ImranR98/Obtainium/releases/download/v1.1.26/app-release.apk",
+      sizeBytes = 24_800_000L,
+      releaseNotes = "バックグラウンド更新チェックとリポジトリフィルタの改善。",
+      releaseDate = "2024-10-02"
+    ),
+    StoreAppItem(
+      id = "bitwarden",
+      name = "Bitwarden",
+      packageName = "com.x8bit.bitwarden",
+      summary = "ゼロ知識暗号化を採用したオープンソースのパスワード＆パスキーマネージャー",
+      description = "Bitwarden はパスワード、パスキー (Passkeys)、クレジットカード、セキュアノートを安全に保管・自動入力できるオープンソースの資格情報マネージャーです。独自ホスト (Vaultwarden) への接続にも完全対応しています。",
+      category = "セキュリティ",
+      author = "bitwarden",
+      iconUrl = "https://raw.githubusercontent.com/bitwarden/mobile/main/store/google/icon.png",
+      githubRepo = "bitwarden/android",
+      websiteUrl = "https://bitwarden.com",
+      sourceRepoName = "Hikaproj Official Curated Index",
+      license = "GPL-3.0",
+      minSdk = 26,
+      architecture = "Universal",
+      latestVersion = "v2024.10.0",
+      downloadUrl = "https://github.com/bitwarden/android/releases/download/v2024.10.0/com.x8bit.bitwarden.apk",
+      sizeBytes = 31_200_000L,
+      releaseNotes = "ネイティブ Kotlin Jetpack Compose UI への刷新とパスキー応答速度の向上。",
+      releaseDate = "2024-10-12"
+    ),
+    StoreAppItem(
+      id = "k9mail",
+      name = "Thunderbird / K-9 Mail",
+      packageName = "com.fsck.k9",
+      summary = "OpenPGP暗号化とマルチアカウント管理に対応した本格メールクライアント",
+      description = "K-9 Mail (現 Thunderbird for Android) は、IMAP Push、OpenPGP (OpenKeychain連携) によるメール暗号化、統合受信トレイを備えた高機能オープンソースメーラーです。",
+      category = "ツール",
+      author = "thunderbird",
+      iconUrl = "https://raw.githubusercontent.com/thunderbird/thunderbird-android/main/app-k9mail/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
+      githubRepo = "thunderbird/thunderbird-android",
+      websiteUrl = "https://k9mail.app",
+      sourceRepoName = "Hikaproj Official Curated Index",
+      license = "Apache-2.0",
+      minSdk = 24,
+      architecture = "Universal",
+      latestVersion = "v8.0",
+      downloadUrl = "https://github.com/thunderbird/thunderbird-android/releases/download/THUNDERBIRD_8_0/k9mail-8.0.apk",
+      sizeBytes = 16_400_000L,
+      releaseNotes = "アカウントセットアップウィザードの刷新とフォルダ同期の省電力化。",
+      releaseDate = "2024-10-30"
+    ),
+    StoreAppItem(
+      id = " breezy_weather",
+      name = "Breezy Weather",
+      packageName = "org.breezyweather",
+      summary = "美しいMaterial Youグラフと豊富な気象ソースを備えたオープンソース天気アプリ",
+      description = "Breezy Weather は Open-Meteo、AccuWeather 等50種類以上の気象データプロバイダに対応し、大気質、花粉、風速、降水確率をリッチなアニメーションとウィジェットで表示する天気アプリです。",
+      category = "ユーティリティ",
+      author = "breezy-weather",
+      iconUrl = "https://raw.githubusercontent.com/breezy-weather/breezy-weather/main/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
+      githubRepo = "breezy-weather/breezy-weather",
+      websiteUrl = "https://github.com/breezy-weather/breezy-weather",
+      sourceRepoName = "Hikaproj Official Curated Index",
+      license = "LGPL-3.0",
+      minSdk = 21,
+      architecture = "arm64-v8a / Universal",
+      latestVersion = "v5.3.2",
+      downloadUrl = "https://github.com/breezy-weather/breezy-weather/releases/download/v5.3.2/breezy-weather-arm64-v8a-5.3.2_standard.apk",
+      sizeBytes = 18_700_000L,
+      releaseNotes = "週間天気チャートの視認性向上とウィジェット更新の安定化。",
+      releaseDate = "2024-10-08"
+    ),
+    StoreAppItem(
+      id = "droidify",
+      name = "Droid-ify",
+      packageName = "com.looker.droidify",
+      summary = "Material Design 3 採用の高速・モダンな F-Droid クライアント",
+      description = "Droid-ify は F-Droid リポジトリエコシステムを快適にブラウズ・検索・導入できる軽量クライアントです。カスタムリポジトリの高速インデックス同期をサポートします。",
+      category = "ユーティリティ",
+      author = "Droid-ify",
+      iconUrl = "https://raw.githubusercontent.com/Droid-ify/client/main/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
+      githubRepo = "Droid-ify/client",
+      websiteUrl = "https://github.com/Droid-ify/client",
+      sourceRepoName = "Hikaproj Official Curated Index",
+      license = "GPL-3.0",
+      minSdk = 23,
+      architecture = "Universal",
+      latestVersion = "v0.6.3",
+      downloadUrl = "https://github.com/Droid-ify/client/releases/download/v0.6.3/app-release.apk",
+      sizeBytes = 7_900_000L,
+      releaseNotes = "Shizuku / Root インストーラー連携の安定性向上。",
+      releaseDate = "2024-09-14"
     )
   )
 
+  fun normalizeGitHubRepo(input: String): String {
+    return input
+      .trim()
+      .removePrefix("https://")
+      .removePrefix("http://")
+      .removePrefix("www.")
+      .removePrefix("github.com/")
+      .substringBefore("/releases")
+      .substringBefore("/tree")
+      .substringBefore("/blob")
+      .substringBefore("?")
+      .substringBefore("#")
+      .trim()
+      .trim('/')
+  }
+
   suspend fun fetchGitHubRelease(repo: String): StoreAppItem? = withContext(Dispatchers.IO) {
     try {
-      val cleanRepo = repo
-        .removePrefix("https://")
-        .removePrefix("http://")
-        .removePrefix("github.com/")
-        .substringBefore("/releases")
-        .substringBefore("/tree")
-        .substringBefore("/blob")
-        .trim()
-        .trim('/')
-      val url = "https://api.github.com/repos/$cleanRepo/releases/latest"
+      val cleanRepo = normalizeGitHubRepo(repo)
+      if (!cleanRepo.contains("/")) return@withContext null
+
+      val url = "https://api.github.com/repos/$cleanRepo/releases"
       val request = Request.Builder()
         .url(url)
-        .header("User-Agent", "OmniInstaller-Android")
+        .header("User-Agent", "Hikaproj-OmniInstaller-Android")
         .header("Accept", "application/vnd.github.v3+json")
         .build()
 
       client.newCall(request).execute().use { response ->
         if (!response.isSuccessful) {
-          Log.w(TAG, "GitHub API returned ${response.code}")
+          Log.w(TAG, "GitHub API returned ${response.code} for $cleanRepo")
           return@withContext null
         }
         val body = response.body?.string() ?: return@withContext null
-        val json = JSONObject(body)
+        val releasesArray = if (body.trim().startsWith("[")) {
+          JSONArray(body)
+        } else {
+          JSONArray().put(JSONObject(body))
+        }
+        if (releasesArray.length() == 0) return@withContext null
 
-        val tagName = json.optString("tag_name", "latest")
-        val releaseName = json.optString("name", tagName)
-        val bodyText = json.optString("body", "GitHub リリース")
-        val publishedAt = json.optString("published_at", "").take(10)
+        val versionsList = mutableListOf<StoreReleaseVersion>()
+        var primaryAssetUrl: String? = null
+        var primaryAssetSize: Long = 0L
+        var latestTag = "latest"
+        var latestTitle = ""
+        var latestBody = ""
+        var latestDate = ""
 
-        // Find APK / XAPK assets
-        val assets = json.optJSONArray("assets") ?: JSONArray()
-        var bestAssetUrl: String? = null
-        var bestAssetName: String = ""
-        var bestAssetSize: Long = 0L
+        val devicePrimaryAbi = Build.SUPPORTED_ABIS.firstOrNull()?.lowercase() ?: "arm64-v8a"
 
-        for (i in 0 until assets.length()) {
-          val asset = assets.getJSONObject(i)
-          val name = asset.optString("name", "")
-          val downloadUrl = asset.optString("browser_download_url", "")
-          val size = asset.optLong("size", 0L)
+        for (rIdx in 0 until minOf(releasesArray.length(), 8)) {
+          val relObj = releasesArray.getJSONObject(rIdx)
+          val tagName = relObj.optString("tag_name", "v1.0")
+          val releaseName = relObj.optString("name", tagName)
+          val bodyText = relObj.optString("body", "GitHub リリース")
+          val publishedAt = relObj.optString("published_at", "").take(10)
 
-          if (name.endsWith(".apk", ignoreCase = true) || name.endsWith(".xapk", ignoreCase = true)) {
-            // Prioritize arm64 or universal over x86 if multiple
-            if (bestAssetUrl == null || name.contains("arm64") || name.contains("universal")) {
-              bestAssetUrl = downloadUrl
-              bestAssetName = name
-              bestAssetSize = size
+          val assets = relObj.optJSONArray("assets") ?: JSONArray()
+          var bestUrlForRelease: String? = null
+          var bestSizeForRelease = 0L
+          var bestAbiLabel = "Universal"
+
+          for (i in 0 until assets.length()) {
+            val asset = assets.getJSONObject(i)
+            val name = asset.optString("name", "")
+            val lowerName = name.lowercase()
+            val downloadUrl = asset.optString("browser_download_url", "")
+            val size = asset.optLong("size", 0L)
+
+            val isSupportedPkg = supportedAssetExtensions.any { lowerName.endsWith(it) }
+            if (isSupportedPkg && downloadUrl.isNotBlank()) {
+              val abiLabel = when {
+                lowerName.contains("arm64") || lowerName.contains("v8a") -> "arm64-v8a"
+                lowerName.contains("armeabi") || lowerName.contains("v7a") -> "armeabi-v7a"
+                lowerName.contains("x86_64") -> "x86_64"
+                lowerName.contains("x86") -> "x86"
+                else -> "Universal"
+              }
+              versionsList.add(
+                StoreReleaseVersion(
+                  versionName = "$tagName ($name)",
+                  downloadUrl = downloadUrl,
+                  sizeBytes = size,
+                  releaseDate = publishedAt,
+                  changelog = bodyText.take(300),
+                  abi = abiLabel
+                )
+              )
+
+              val isPreferredAbi = lowerName.contains(devicePrimaryAbi) ||
+                lowerName.contains("arm64") ||
+                lowerName.contains("universal")
+              if (bestUrlForRelease == null || isPreferredAbi) {
+                bestUrlForRelease = downloadUrl
+                bestSizeForRelease = size
+                bestAbiLabel = abiLabel
+              }
             }
+          }
+
+          if (primaryAssetUrl == null && bestUrlForRelease != null) {
+            primaryAssetUrl = bestUrlForRelease
+            primaryAssetSize = bestSizeForRelease
+            latestTag = tagName
+            latestTitle = releaseName
+            latestBody = bodyText
+            latestDate = publishedAt
           }
         }
 
-        if (bestAssetUrl == null) {
-          return@withContext null
-        }
-
+        val finalDownloadUrl = primaryAssetUrl ?: return@withContext null
         val parts = cleanRepo.split("/")
-        val appTitle = if (releaseName.isNotBlank() && !releaseName.startsWith("v")) {
-          releaseName
+        val owner = parts.getOrNull(0) ?: "GitHub"
+        val repoName = parts.getOrNull(1) ?: cleanRepo
+        val appTitle = if (latestTitle.isNotBlank() && !latestTitle.startsWith("v", ignoreCase = true) && latestTitle.length < 36) {
+          latestTitle
         } else {
-          parts.getOrNull(1) ?: cleanRepo
+          repoName
         }
 
         StoreAppItem(
           id = cleanRepo.replace("/", "_").lowercase(),
           name = appTitle,
-          packageName = "com.github.${parts.getOrNull(0)?.lowercase()}.${parts.getOrNull(1)?.lowercase()}",
-          summary = "GitHub: $cleanRepo の最新リリース",
+          packageName = "com.github.${owner.lowercase().replace("[^a-z0-9]".toRegex(), "")}.${repoName.lowercase().replace("[^a-z0-9]".toRegex(), "")}",
+          summary = "GitHub ($cleanRepo) から直接取得された最新リリース",
+          description = latestBody.ifBlank { "GitHub リポジトリ $cleanRepo の公式リリースパッケージです。" },
           category = "GitHub リポ",
-          author = parts.getOrNull(0) ?: "GitHub",
-          iconUrl = "https://github.com/${parts.getOrNull(0)}.png",
+          author = owner,
+          iconUrl = "https://github.com/$owner.png",
           githubRepo = cleanRepo,
-          latestVersion = tagName,
-          downloadUrl = bestAssetUrl,
-          sizeBytes = bestAssetSize,
-          releaseNotes = bodyText.take(400),
-          releaseDate = publishedAt
+          websiteUrl = "https://github.com/$cleanRepo",
+          sourceRepoName = "GitHub: $cleanRepo",
+          license = "Open Source",
+          minSdk = 24,
+          architecture = "Multi-ABI / Universal",
+          latestVersion = latestTag,
+          downloadUrl = finalDownloadUrl,
+          sizeBytes = primaryAssetSize,
+          releaseNotes = latestBody.take(600),
+          releaseDate = latestDate,
+          versions = versionsList
         )
       }
     } catch (e: Exception) {
@@ -207,45 +493,268 @@ object StoreRepository {
     }
   }
 
-  suspend fun syncCustomHost(url: String): List<StoreAppItem> = withContext(Dispatchers.IO) {
+  /**
+   * Syncs a custom repository URL or raw JSON text.
+   * Supports:
+   * 1. OmniInstaller Repository Schema: `{ "repo_name": "...", "apps": [ ... ] }`
+   * 2. Direct JSON Array of Apps: `[ { "id": "...", "name": "...", "download_url": "..." }, ... ]`
+   * 3. F-Droid Index v1 Schema: `{ "repo": { "name": "...", "address": "..." }, "apps": [ ... ], "packages": { ... } }`
+   * 4. Obtainium / Repo List Schema: `[ "owner/repo1", "owner/repo2" ]` or `{ "configs": [ { "url": "..." } ] }`
+   */
+  suspend fun syncCustomHost(urlOrJson: String): Pair<StoreRepositorySource?, List<StoreAppItem>> = withContext(Dispatchers.IO) {
     try {
-      val request = Request.Builder()
-        .url(url)
-        .header("User-Agent", "OmniInstaller-Android")
-        .build()
+      val trimmed = urlOrJson.trim()
+      val rawText: String
+      val sourceUrl: String
 
-      client.newCall(request).execute().use { response ->
-        if (!response.isSuccessful) return@withContext emptyList()
-        val text = response.body?.string() ?: return@withContext emptyList()
-        val jsonArray = JSONArray(text)
-        val list = mutableListOf<StoreAppItem>()
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        rawText = trimmed
+        sourceUrl = "local://inline-json-${System.currentTimeMillis()}"
+      } else {
+        sourceUrl = trimmed
+        val request = Request.Builder()
+          .url(sourceUrl)
+          .header("User-Agent", "Hikaproj-OmniInstaller-Android")
+          .build()
 
-        for (i in 0 until jsonArray.length()) {
-          val obj = jsonArray.getJSONObject(i)
-          list.add(
-            StoreAppItem(
-              id = obj.optString("id", "custom_$i"),
-              name = obj.optString("name", "Custom App"),
-              packageName = obj.optString("package_name", "com.custom.app$i"),
-              summary = obj.optString("summary", "独自ホストから同期されたアプリ"),
-              category = obj.optString("category", "独自リポジトリ"),
-              author = obj.optString("author", "Self-hosted"),
-              iconUrl = obj.optString("icon_url", ""),
-              githubRepo = obj.optString("github_repo").ifBlank { null },
-              latestVersion = obj.optString("version", "1.0"),
-              downloadUrl = obj.optString("download_url", ""),
-              sizeBytes = obj.optLong("size", 10_000_000L),
-              releaseNotes = obj.optString("changelog", "更新情報"),
-              releaseDate = obj.optString("date", "2024-10-01")
-            )
-          )
+        rawText = client.newCall(request).execute().use { response ->
+          if (!response.isSuccessful) return@withContext (null to emptyList())
+          response.body?.string() ?: return@withContext (null to emptyList())
         }
-        list
       }
+
+      parseRepositoryJsonText(rawText, sourceUrl)
     } catch (e: Exception) {
       Log.e(TAG, "Custom host sync error: ${e.message}")
-      emptyList()
+      null to emptyList()
     }
+  }
+
+  suspend fun parseRepositoryJsonText(
+    rawText: String,
+    sourceUrl: String
+  ): Pair<StoreRepositorySource?, List<StoreAppItem>> = withContext(Dispatchers.IO) {
+    val cleanText = rawText.trim()
+    val list = mutableListOf<StoreAppItem>()
+    var repoName = "カスタムリポジトリ (${sourceUrl.substringAfter("://").substringBefore("/")})"
+    var repoDesc = "外部ホストから同期されたアプリカタログ"
+
+    if (cleanText.startsWith("[")) {
+      val jsonArray = JSONArray(cleanText)
+      for (i in 0 until jsonArray.length()) {
+        val elem = jsonArray.get(i)
+        when (elem) {
+          is JSONObject -> {
+            parseAppJsonObject(elem, i, repoName)?.let { list.add(it) }
+          }
+          is String -> {
+            // Array of GitHub repo names or URLs
+            fetchGitHubRelease(elem)?.let { list.add(it) }
+          }
+        }
+      }
+    } else if (cleanText.startsWith("{")) {
+      val root = JSONObject(cleanText)
+      repoName = root.optString("repo_name", root.optString("name", repoName))
+      repoDesc = root.optString("description", repoDesc)
+
+      // Check F-Droid style `repo` metadata
+      val fdroidRepoObj = root.optJSONObject("repo")
+      val fdroidBaseAddress = fdroidRepoObj?.optString("address", "")?.trimEnd('/') ?: ""
+      if (fdroidRepoObj != null) {
+        repoName = fdroidRepoObj.optString("name", repoName)
+        repoDesc = fdroidRepoObj.optString("description", repoDesc)
+      }
+
+      val packagesMap = root.optJSONObject("packages")
+      val appsArray = root.optJSONArray("apps")
+
+      if (appsArray != null) {
+        for (i in 0 until appsArray.length()) {
+          val obj = appsArray.optJSONObject(i) ?: continue
+          if (packagesMap != null && fdroidBaseAddress.isNotBlank()) {
+            // F-Droid index-v1 format
+            val pkgName = obj.optString("packageName", "")
+            val pkgVersions = packagesMap.optJSONArray(pkgName)
+            val firstPkg = pkgVersions?.optJSONObject(0)
+            val apkName = firstPkg?.optString("apkName", "") ?: ""
+            val verName = firstPkg?.optString("versionName", "1.0") ?: "1.0"
+            val size = firstPkg?.optLong("size", 10_000_000L) ?: 10_000_000L
+            val downloadUrl = if (apkName.isNotBlank()) "$fdroidBaseAddress/$apkName" else ""
+            if (pkgName.isNotBlank() && downloadUrl.isNotBlank()) {
+              val localizedName = obj.optString("name", pkgName.substringAfterLast('.'))
+              val summary = obj.optString("summary", "F-Droid リポジトリ掲載アプリ")
+              val desc = obj.optString("description", summary)
+              val cats = obj.optJSONArray("categories")
+              val category = if (cats != null && cats.length() > 0) cats.optString(0, "F-Droid") else "F-Droid"
+              list.add(
+                StoreAppItem(
+                  id = "fdroid_${pkgName.replace('.', '_')}",
+                  name = localizedName,
+                  packageName = pkgName,
+                  summary = summary,
+                  description = desc,
+                  category = category,
+                  author = obj.optString("authorName", "F-Droid Author"),
+                  iconUrl = "",
+                  githubRepo = obj.optString("sourceCode").takeIf { it.contains("github.com") }?.let { normalizeGitHubRepo(it) },
+                  websiteUrl = obj.optString("webSite", ""),
+                  sourceRepoName = repoName,
+                  license = obj.optString("license", "FOSS"),
+                  minSdk = firstPkg?.optInt("minSdkVersion", 21) ?: 21,
+                  latestVersion = verName,
+                  downloadUrl = downloadUrl,
+                  sizeBytes = size,
+                  releaseNotes = obj.optString("whatsNew", "F-Droid 同期パッケージ"),
+                  releaseDate = ""
+                )
+              )
+            }
+          } else {
+            parseAppJsonObject(obj, i, repoName)?.let { list.add(it) }
+          }
+        }
+      } else if (root.has("configs")) {
+        // Obtainium export JSON format
+        val configs = root.optJSONArray("configs") ?: JSONArray()
+        for (i in 0 until configs.length()) {
+          val cfg = configs.optJSONObject(i) ?: continue
+          val url = cfg.optString("url", "")
+          if (url.contains("github.com")) {
+            fetchGitHubRelease(url)?.let { list.add(it) }
+          }
+        }
+      } else if (root.has("download_url") || root.has("apk_url") || root.has("package_name")) {
+        // Single app JSON object
+        parseAppJsonObject(root, 0, repoName)?.let { list.add(it) }
+      }
+    }
+
+    val source = StoreRepositorySource(
+      id = "repo_${sourceUrl.hashCode()}",
+      name = repoName,
+      url = sourceUrl,
+      description = repoDesc,
+      appCount = list.size,
+      lastSynced = "同期完了 (${list.size}件)"
+    )
+    source to list
+  }
+
+  private fun parseAppJsonObject(obj: JSONObject, index: Int, defaultRepoName: String): StoreAppItem? {
+    val githubRepo = obj.optString("github_repo", obj.optString("github", "")).ifBlank { null }
+    val downloadUrl = obj.optString("download_url", obj.optString("apk_url", obj.optString("url", "")))
+    if (downloadUrl.isBlank() && githubRepo != null) {
+      // Can be resolved via GitHub release
+      return null
+    }
+    if (downloadUrl.isBlank()) return null
+
+    val pkgName = obj.optString("package_name", obj.optString("packageName", "com.custom.app$index"))
+    val name = obj.optString("name", obj.optString("title", pkgName.substringAfterLast('.')))
+    val summary = obj.optString("summary", obj.optString("short_description", "カスタムリポジトリから同期されたアプリ"))
+    val description = obj.optString("description", summary)
+    val ver = obj.optString("version", obj.optString("latest_version", "1.0"))
+
+    val versionsArr = obj.optJSONArray("versions")
+    val parsedVersions = mutableListOf<StoreReleaseVersion>()
+    if (versionsArr != null) {
+      for (vIdx in 0 until versionsArr.length()) {
+        val vObj = versionsArr.optJSONObject(vIdx) ?: continue
+        parsedVersions.add(
+          StoreReleaseVersion(
+            versionName = vObj.optString("version", ver),
+            downloadUrl = vObj.optString("download_url", downloadUrl),
+            sizeBytes = vObj.optLong("size", 10_000_000L),
+            releaseDate = vObj.optString("date", ""),
+            changelog = vObj.optString("changelog", ""),
+            abi = vObj.optString("abi", "Universal")
+          )
+        )
+      }
+    }
+
+    val screenshotsArr = obj.optJSONArray("screenshots")
+    val screenshots = mutableListOf<String>()
+    if (screenshotsArr != null) {
+      for (sIdx in 0 until screenshotsArr.length()) {
+        screenshotsArr.optString(sIdx)?.takeIf { it.isNotBlank() }?.let { screenshots.add(it) }
+      }
+    }
+
+    return StoreAppItem(
+      id = obj.optString("id", "${pkgName}_$index"),
+      name = name,
+      packageName = pkgName,
+      summary = summary,
+      description = description,
+      category = obj.optString("category", "独自リポジトリ"),
+      author = obj.optString("author", obj.optString("developer", "Self-hosted")),
+      iconUrl = obj.optString("icon_url", obj.optString("icon", "")),
+      screenshots = screenshots,
+      githubRepo = githubRepo,
+      websiteUrl = obj.optString("website_url", obj.optString("website", "")),
+      sourceRepoName = obj.optString("repo_name", defaultRepoName),
+      license = obj.optString("license", "Custom / Open Source"),
+      minSdk = obj.optInt("min_sdk", 24),
+      architecture = obj.optString("architecture", "Universal"),
+      latestVersion = ver,
+      downloadUrl = downloadUrl,
+      sizeBytes = obj.optLong("size", obj.optLong("size_bytes", 12_000_000L)),
+      releaseNotes = obj.optString("changelog", obj.optString("release_notes", "更新情報")),
+      releaseDate = obj.optString("date", obj.optString("release_date", "2024-10-01")),
+      versions = parsedVersions
+    )
+  }
+
+  /**
+   * Batch imports multiple repositories, GitHub owner/repo lines, or JSON manifests at once.
+   */
+  suspend fun batchImportSources(
+    rawInput: String
+  ): Pair<List<StoreRepositorySource>, List<StoreAppItem>> = withContext(Dispatchers.IO) {
+    val trimmed = rawInput.trim()
+    if (trimmed.isEmpty()) return@withContext (emptyList<StoreRepositorySource>() to emptyList())
+
+    // If the entire input is a JSON array or object, parse it directly
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      val (repoSource, items) = parseRepositoryJsonText(trimmed, "local://batch-json")
+      val repos = if (repoSource != null) listOf(repoSource) else emptyList()
+      return@withContext (repos to items)
+    }
+
+    val addedRepos = mutableListOf<StoreRepositorySource>()
+    val addedApps = mutableListOf<StoreAppItem>()
+
+    val entries = trimmed
+      .split("\n", "\r\n", ",", ";")
+      .map { it.trim() }
+      .filter { it.isNotBlank() && !it.startsWith("#") }
+
+    for (entry in entries) {
+      when {
+        entry.startsWith("http://") || entry.startsWith("https://") -> {
+          if (entry.contains("github.com/") && !entry.endsWith(".json", ignoreCase = true) && !entry.contains("raw.githubusercontent.com")) {
+            fetchGitHubRelease(entry)?.let { app ->
+              addedApps.add(app)
+            }
+          } else {
+            val (source, items) = syncCustomHost(entry)
+            if (source != null && items.isNotEmpty()) {
+              addedRepos.add(source)
+              addedApps.addAll(items)
+            }
+          }
+        }
+        entry.contains("/") && !entry.contains(" ") -> {
+          fetchGitHubRelease(entry)?.let { app ->
+            addedApps.add(app)
+          }
+        }
+      }
+    }
+
+    addedRepos to addedApps
   }
 
   fun updateInstalledStatus(context: Context, items: List<StoreAppItem>): List<StoreAppItem> {
@@ -267,37 +776,62 @@ object StoreRepository {
   }
 
   private fun isVersionNewer(remoteVer: String, installedVer: String): Boolean {
-    val cleanRemote = remoteVer.removePrefix("v").substringBefore("-")
-    val cleanInstalled = installedVer.removePrefix("v").substringBefore("-")
+    val cleanRemote = remoteVer.removePrefix("v").substringBefore("-").substringBefore(" ").trim()
+    val cleanInstalled = installedVer.removePrefix("v").substringBefore("-").substringBefore(" ").trim()
     return cleanRemote != cleanInstalled
   }
 
   fun downloadApkStream(
     context: Context,
-    item: StoreAppItem
-  ): Flow<DownloadProgress> = flow {
-    emit(DownloadProgress(0f, 0L, item.sizeBytes, null, "ダウンロード開始中..."))
+    item: StoreAppItem,
+    overrideDownloadUrl: String? = null
+  ): Flow<DownloadProgress> = downloadDirectUrlStream(
+    context = context,
+    directUrl = overrideDownloadUrl ?: item.downloadUrl,
+    preferredId = "${item.id}_${item.latestVersion.replace("[^a-zA-Z0-9_.-]".toRegex(), "_")}",
+    expectedSize = item.sizeBytes
+  )
 
-    val extension = when {
-      item.downloadUrl.lowercase().contains(".xapk") -> "xapk"
-      item.downloadUrl.lowercase().contains(".apks") -> "apks"
-      item.downloadUrl.lowercase().contains(".apkm") -> "apkm"
-      item.downloadUrl.lowercase().contains(".zip") -> "zip"
-      else -> "apk"
-    }
-    val cleanVer = item.latestVersion.replace("[^a-zA-Z0-9_.-]".toRegex(), "_")
-    val safeName = "${item.id}_${cleanVer}.$extension"
-    val outFile = File(context.cacheDir, safeName)
+  fun downloadDirectUrlStream(
+    context: Context,
+    directUrl: String,
+    preferredId: String? = null,
+    expectedSize: Long = 0L
+  ): Flow<DownloadProgress> = flow {
+    emit(DownloadProgress(0f, 0L, expectedSize, null, "直リンクへ接続中..."))
 
     try {
-      val request = Request.Builder().url(item.downloadUrl).build()
+      val request = Request.Builder()
+        .url(directUrl.trim())
+        .header("User-Agent", "Hikaproj-OmniInstaller-Android")
+        .build()
+
       client.newCall(request).execute().use { response ->
         if (!response.isSuccessful) {
-          emit(DownloadProgress(0f, 0L, item.sizeBytes, null, "ダウンロード失敗 (HTTP ${response.code})", isError = true))
+          emit(DownloadProgress(0f, 0L, expectedSize, null, "ダウンロード失敗 (HTTP ${response.code})", isError = true))
           return@flow
         }
-        val body = response.body ?: throw IllegalStateException("Empty body")
-        val contentLength = if (body.contentLength() > 0) body.contentLength() else item.sizeBytes
+
+        val body = response.body ?: throw IllegalStateException("レスポンスボディが空です")
+        val contentLength = if (body.contentLength() > 0) body.contentLength() else expectedSize
+
+        // Detect filename from Content-Disposition or URL path
+        val disposition = response.header("Content-Disposition") ?: ""
+        val fileNameFromHeader = Regex("filename\\*?=(?:UTF-8'')?\"?([^\";]+)\"?", RegexOption.IGNORE_CASE)
+          .find(disposition)
+          ?.groupValues
+          ?.getOrNull(1)
+          ?.let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) }
+
+        val urlPathSegment = directUrl.substringBefore('?').substringBefore('#').substringAfterLast('/')
+        val detectedExt = detectExtensionFromName(fileNameFromHeader ?: urlPathSegment)
+        val baseName = preferredId
+          ?: (fileNameFromHeader ?: urlPathSegment)
+            .substringBeforeLast('.')
+            .replace("[^a-zA-Z0-9_.-]".toRegex(), "_")
+            .ifBlank { "direct_pkg_${System.currentTimeMillis()}" }
+
+        val outFile = File(context.cacheDir, "${baseName}.$detectedExt")
 
         body.byteStream().use { input ->
           FileOutputStream(outFile).use { output ->
@@ -308,19 +842,50 @@ object StoreRepository {
             while (input.read(buffer).also { bytesRead = it } != -1) {
               output.write(buffer, 0, bytesRead)
               totalRead += bytesRead
-              val progress = if (contentLength > 0) totalRead.toFloat() / contentLength else 0.5f
-              emit(DownloadProgress(progress, totalRead, contentLength, null, "ダウンロード中... (${totalRead / 1024 / 1024}MB)"))
+              val progress = if (contentLength > 0) (totalRead.toFloat() / contentLength).coerceIn(0f, 0.99f) else 0.5f
+              val mbRead = String.format("%.1f", totalRead / 1024f / 1024f)
+              emit(DownloadProgress(progress, totalRead, contentLength, null, "ダウンロード中... (${mbRead} MB)"))
             }
           }
         }
-      }
 
-      emit(DownloadProgress(1f, outFile.length(), outFile.length(), outFile, "ダウンロード完了"))
+        emit(DownloadProgress(1f, outFile.length(), outFile.length(), outFile, "ダウンロード完了: ${outFile.name}"))
+      }
     } catch (e: Exception) {
-      Log.e(TAG, "Download error", e)
-      emit(DownloadProgress(0f, 0L, item.sizeBytes, null, "ダウンロードエラー: ${e.message}", isError = true))
+      Log.e(TAG, "Direct download error", e)
+      emit(DownloadProgress(0f, 0L, expectedSize, null, "ダウンロードエラー: ${e.message}", isError = true))
     }
   }.flowOn(Dispatchers.IO)
+
+  private fun detectExtensionFromName(rawName: String): String {
+    val lower = rawName.lowercase()
+    return when {
+      lower.endsWith(".tar.gz") -> "tar.gz"
+      lower.endsWith(".apk.gz") -> "apk.gz"
+      lower.endsWith(".tgz") -> "tgz"
+      lower.endsWith(".tar") -> "tar"
+      lower.endsWith(".xapk") -> "xapk"
+      lower.endsWith(".apks") -> "apks"
+      lower.endsWith(".apkm") -> "apkm"
+      lower.endsWith(".aab") -> "aab"
+      lower.endsWith(".omni") -> "omni"
+      lower.endsWith(".hpjpkg") -> "hpjpkg"
+      lower.endsWith(".omnibak") -> "omnibak"
+      lower.endsWith(".hpjbak") -> "hpjbak"
+      lower.endsWith(".zapk") -> "zapk"
+      lower.endsWith(".sapk") -> "sapk"
+      lower.endsWith(".mapk") -> "mapk"
+      lower.endsWith(".bapk") -> "bapk"
+      lower.endsWith(".apk+") -> "apk+"
+      lower.endsWith(".apex") -> "apex"
+      lower.endsWith(".pack") -> "pack"
+      lower.endsWith(".jar") -> "jar"
+      lower.endsWith(".ab") -> "ab"
+      lower.endsWith(".bin") -> "bin"
+      lower.endsWith(".zip") -> "zip"
+      else -> "apk"
+    }
+  }
 }
 
 data class DownloadProgress(

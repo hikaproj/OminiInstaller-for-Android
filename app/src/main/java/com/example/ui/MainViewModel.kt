@@ -2,7 +2,6 @@ package com.example.ui
 
 import android.app.Application
 import android.net.Uri
-import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.backup.BackupManager
@@ -11,9 +10,13 @@ import com.example.installer.PackageParser
 import com.example.installer.RootHelper
 import com.example.model.ApkArchiveInfo
 import com.example.model.BackupArchiveItem
+import com.example.model.BackupExportFormat
+import com.example.model.DeepLinkConfirmationState
+import com.example.model.DeepLinkType
 import com.example.model.DeviceOptimizationState
 import com.example.model.InstalledAppItem
 import com.example.model.StoreAppItem
+import com.example.model.StoreRepositorySource
 import com.example.optimizer.AppsManagerRepository
 import com.example.remote.RemoteInstallerServer
 import com.example.store.DownloadProgress
@@ -58,11 +61,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   private val _isParsing = MutableStateFlow(false)
   val isParsing: StateFlow<Boolean> = _isParsing.asStateFlow()
 
+  private val _directUrlProgress = MutableStateFlow<DownloadProgress?>(null)
+  val directUrlProgress: StateFlow<DownloadProgress?> = _directUrlProgress.asStateFlow()
+
   val installSessionState = PackageInstallerManager.sessionState
 
   // Store State
   private val _storeApps = MutableStateFlow<List<StoreAppItem>>(StoreRepository.defaultCuratedApps)
   val storeApps: StateFlow<List<StoreAppItem>> = _storeApps.asStateFlow()
+
+  private val _repositories = MutableStateFlow<List<StoreRepositorySource>>(StoreRepository.defaultRepositories)
+  val repositories: StateFlow<List<StoreRepositorySource>> = _repositories.asStateFlow()
+
+  private val _selectedStoreApp = MutableStateFlow<StoreAppItem?>(null)
+  val selectedStoreApp: StateFlow<StoreAppItem?> = _selectedStoreApp.asStateFlow()
+
+  private val _deepLinkState = MutableStateFlow<DeepLinkConfirmationState?>(null)
+  val deepLinkState: StateFlow<DeepLinkConfirmationState?> = _deepLinkState.asStateFlow()
 
   private val _storeSearchQuery = MutableStateFlow("")
   val storeSearchQuery: StateFlow<String> = _storeSearchQuery.asStateFlow()
@@ -95,11 +110,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   private val _inspectingApp = MutableStateFlow<InstalledAppItem?>(null)
   val inspectingApp: StateFlow<InstalledAppItem?> = _inspectingApp.asStateFlow()
 
+  // Backup Export Format State (24+ formats)
+  private val _selectedBackupFormat = MutableStateFlow(BackupExportFormat.OMNI)
+  val selectedBackupFormat: StateFlow<BackupExportFormat> = _selectedBackupFormat.asStateFlow()
+
   // Remote Server
-  private val remoteServer: RemoteInstallerServer = RemoteInstallerServer(context) { file ->
-    // On file received from PC
-    handleFileReceivedFromRemote(file)
-  }
+  private val remoteServer: RemoteInstallerServer = RemoteInstallerServer(
+    context = context,
+    onPackageReceived = { file ->
+      handleFileReceivedFromRemote(file)
+    },
+    onDirectUrlReceived = { url ->
+      installFromDirectUrl(url)
+    }
+  )
   val remoteServerStatus = remoteServer.status
 
   // Optimization & Backups
@@ -159,6 +183,62 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
   }
 
+  /**
+   * Parses multiple selected APK files together as a unified Split APK bundle.
+   */
+  fun parseMultiplePackageUris(uris: List<Uri>) {
+    if (uris.isEmpty()) return
+    if (uris.size == 1) {
+      parsePackageFromUri(uris.first())
+      return
+    }
+    viewModelScope.launch {
+      _isParsing.value = true
+      try {
+        val copiedFiles = uris.mapIndexed { idx, uri ->
+          val rawName = PackageParser.getFileNameFromUri(context, uri)
+          val safeName = if (rawName.endsWith(".apk", ignoreCase = true)) rawName else "split_${idx}_$rawName.apk"
+          PackageParser.copyUriToTempFile(context, uri, safeName)
+        }
+        val info = PackageParser.parseMultipleApkFiles(context, copiedFiles)
+        _parsedArchive.value = info
+        PackageInstallerManager.resetState()
+        _currentTab.value = NavigationTab.INSTALLER
+        showMessage("${copiedFiles.size} 個のAPKをマルチAPKバンドルとして統合解析しました")
+      } catch (e: Exception) {
+        showMessage("複数APK解析エラー: ${e.message}")
+      } finally {
+        _isParsing.value = false
+      }
+    }
+  }
+
+  /**
+   * Downloads an APK/XAPK/APKS/archive from a direct HTTP/HTTPS URL and opens it in the installer.
+   */
+  fun installFromDirectUrl(directUrl: String) {
+    val cleanUrl = directUrl.trim()
+    if (cleanUrl.isBlank()) return
+    if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
+      showMessage("有効な http:// または https:// の直リンクを入力してください")
+      return
+    }
+
+    viewModelScope.launch {
+      _currentTab.value = NavigationTab.INSTALLER
+      StoreRepository.downloadDirectUrlStream(context, cleanUrl).collect { progress ->
+        _directUrlProgress.value = progress
+        if (progress.targetFile != null && progress.progress >= 1.0f) {
+          _directUrlProgress.value = null
+          showMessage("直リンクからのダウンロード完了: パッケージを解析中...")
+          parsePackageFromFile(progress.targetFile)
+        } else if (progress.isError) {
+          showMessage(progress.statusMessage)
+        }
+      }
+    }
+  }
+
   fun parsePackageFromFile(file: File) {
     viewModelScope.launch {
       _isParsing.value = true
@@ -187,7 +267,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     PackageInstallerManager.resetState()
   }
 
-  // STORE ACTIONS
+  // STORE & DEEP LINK ACTIONS
   fun setStoreSearchQuery(query: String) {
     _storeSearchQuery.value = query
   }
@@ -196,57 +276,220 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     _selectedCategory.value = cat
   }
 
-  fun fetchGitHubRepo(repoInput: String) {
-    if (repoInput.isBlank()) return
-    viewModelScope.launch {
-      _isSearchingRepo.value = true
-      try {
-        val item = StoreRepository.fetchGitHubRelease(repoInput)
-        if (item != null) {
-          val updated = listOf(item) + _storeApps.value.filter { it.id != item.id }
-          _storeApps.value = StoreRepository.updateInstalledStatus(context, updated)
-          showMessage("GitHubから「${item.name}」を取得しました")
-        } else {
-          showMessage("リリースまたはAPKが見つかりませんでした。リポジトリ名を確認してください。")
+  fun openStoreAppDetail(app: StoreAppItem?) {
+    _selectedStoreApp.value = app
+  }
+
+  fun dismissDeepLinkDialog() {
+    _deepLinkState.value = null
+  }
+
+  fun confirmDeepLinkAction() {
+    val state = _deepLinkState.value ?: return
+    _deepLinkState.value = null
+
+    when (state.type) {
+      DeepLinkType.ADD_REPOS -> {
+        val combined = (state.repoUrls + state.githubRepos).joinToString("\n")
+        batchImportStoreSources(combined)
+      }
+      DeepLinkType.OPEN_APP_DETAIL -> {
+        state.targetApp?.let { app ->
+          _currentTab.value = NavigationTab.STORE
+          _selectedStoreApp.value = app
         }
-      } catch (e: Exception) {
-        showMessage("GitHub取得エラー: ${e.message}")
-      } finally {
-        _isSearchingRepo.value = false
+      }
+      DeepLinkType.DIRECT_INSTALL -> {
+        state.directInstallUrl?.let { url ->
+          installFromDirectUrl(url)
+        }
       }
     }
+  }
+
+  /**
+   * Handles `hpjominii://` custom URI scheme links:
+   * - `hpjominii://store/repo?url=...&urls=url1,url2&github=owner/repo1,owner/repo2`
+   * - `hpjominii://repo/add?urls=...`
+   * - `hpjominii://store/app?pkg=...&name=...&version=...&apk=...&github=...&desc=...`
+   * - `hpjominii://app?id=...`
+   * - `hpjominii://install?url=https://.../app.apk`
+   */
+  fun handleDeepLink(uri: Uri) {
+    if (uri.scheme?.lowercase() != "hpjominii") {
+      parsePackageFromUri(uri)
+      return
+    }
+
+    val host = uri.host?.lowercase() ?: ""
+    val path = uri.path?.lowercase() ?: ""
+    val fullRoute = "$host$path"
+
+    // 1. Direct Install Link: hpjominii://install?url=...
+    if (host == "install" || fullRoute.contains("install")) {
+      val directUrl = uri.getQueryParameter("url") ?: uri.getQueryParameter("apk") ?: ""
+      if (directUrl.isNotBlank()) {
+        _currentTab.value = NavigationTab.INSTALLER
+        _deepLinkState.value = DeepLinkConfirmationState(
+          rawUri = uri.toString(),
+          type = DeepLinkType.DIRECT_INSTALL,
+          directInstallUrl = directUrl
+        )
+        return
+      }
+    }
+
+    // 2. App Detail Link (even if repo is not added):
+    // hpjominii://store/app?pkg=org.example&name=MyApp&apk=https://...&github=owner/repo
+    // or hpjominii://app?id=newpipe
+    if (host == "app" || path.startsWith("/app")) {
+      _currentTab.value = NavigationTab.STORE
+      val appId = uri.getQueryParameter("id") ?: path.removePrefix("/app").trim('/')
+      val pkgParam = uri.getQueryParameter("pkg") ?: uri.getQueryParameter("package")
+      val githubParam = uri.getQueryParameter("github") ?: uri.getQueryParameter("repo")
+      val apkUrlParam = uri.getQueryParameter("apk") ?: uri.getQueryParameter("url") ?: uri.getQueryParameter("download_url")
+
+      // First check if already in local store catalog
+      val existing = _storeApps.value.find {
+        (appId.isNotBlank() && it.id.equals(appId, ignoreCase = true)) ||
+          (pkgParam != null && it.packageName.equals(pkgParam, ignoreCase = true)) ||
+          (githubParam != null && it.githubRepo.equals(githubParam, ignoreCase = true))
+      }
+
+      if (existing != null && apkUrlParam == null) {
+        _selectedStoreApp.value = existing
+        showMessage("ストア詳細ページを開きました: ${existing.name}")
+        return
+      }
+
+      // If not in added repositories, dynamically resolve from GitHub or construct standalone StoreAppItem!
+      if (!githubParam.isNullOrBlank() && apkUrlParam.isNullOrBlank()) {
+        viewModelScope.launch {
+          _isSearchingRepo.value = true
+          val fetched = StoreRepository.fetchGitHubRelease(githubParam)
+          _isSearchingRepo.value = false
+          if (fetched != null) {
+            val enriched = StoreRepository.updateInstalledStatus(context, listOf(fetched)).first()
+            _selectedStoreApp.value = enriched
+            showMessage("未登録リポジトリからアプリ詳細を動的生成しました: ${enriched.name}")
+          } else {
+            showMessage("指定されたGitHubリポジトリからアプリ情報を取得できませんでした")
+          }
+        }
+        return
+      }
+
+      // Construct standalone StoreAppItem directly from URI parameters without needing repository registration
+      val dynamicName = uri.getQueryParameter("name") ?: pkgParam?.substringAfterLast('.') ?: appId.ifBlank { "External Store App" }
+      val dynamicPkg = pkgParam ?: "com.hpjominii.dynamic.${dynamicName.lowercase().replace("[^a-z0-9]".toRegex(), "")}"
+      val dynamicVer = uri.getQueryParameter("version") ?: "v1.0"
+      val dynamicSummary = uri.getQueryParameter("summary") ?: "hpjominii:// リンクから直接開かれたアプリ詳細ページ"
+      val dynamicDesc = uri.getQueryParameter("desc") ?: uri.getQueryParameter("description") ?: dynamicSummary
+      val dynamicAuthor = uri.getQueryParameter("author") ?: "External Developer"
+      val dynamicIcon = uri.getQueryParameter("icon") ?: ""
+      val dynamicLicense = uri.getQueryParameter("license") ?: "Custom"
+
+      val dynamicItem = StoreAppItem(
+        id = appId.ifBlank { "deeplink_${System.currentTimeMillis()}" },
+        name = dynamicName,
+        packageName = dynamicPkg,
+        summary = dynamicSummary,
+        description = dynamicDesc,
+        category = uri.getQueryParameter("category") ?: "ディープリンク",
+        author = dynamicAuthor,
+        iconUrl = dynamicIcon,
+        githubRepo = githubParam,
+        websiteUrl = uri.getQueryParameter("website") ?: "",
+        sourceRepoName = "Direct DeepLink (リポジトリ未登録でも利用可能)",
+        license = dynamicLicense,
+        latestVersion = dynamicVer,
+        downloadUrl = apkUrlParam ?: "",
+        sizeBytes = uri.getQueryParameter("size")?.toLongOrNull() ?: 15_000_000L,
+        releaseNotes = uri.getQueryParameter("changelog") ?: "ディープリンク経由のパッケージ",
+        releaseDate = uri.getQueryParameter("date") ?: "最新"
+      )
+      val checkedItem = StoreRepository.updateInstalledStatus(context, listOf(dynamicItem)).first()
+      _selectedStoreApp.value = checkedItem
+      return
+    }
+
+    // 3. Repository / Multi-Repository Addition Link:
+    // hpjominii://store/repo?url=... or hpjominii://store?urls=url1,url2&github=owner/repo1,owner/repo2
+    _currentTab.value = NavigationTab.STORE
+    val repoUrls = mutableListOf<String>()
+    val githubRepos = mutableListOf<String>()
+
+    uri.getQueryParameters("url").forEach { repoUrls.addAll(it.split(",").map(String::trim).filter(String::isNotBlank)) }
+    uri.getQueryParameters("urls").forEach { repoUrls.addAll(it.split(",").map(String::trim).filter(String::isNotBlank)) }
+    uri.getQueryParameters("repo").forEach {
+      it.split(",").map(String::trim).filter(String::isNotBlank).forEach { item ->
+        if (item.startsWith("http")) repoUrls.add(item) else githubRepos.add(item)
+      }
+    }
+    uri.getQueryParameters("repos").forEach {
+      it.split(",").map(String::trim).filter(String::isNotBlank).forEach { item ->
+        if (item.startsWith("http")) repoUrls.add(item) else githubRepos.add(item)
+      }
+    }
+    uri.getQueryParameters("github").forEach {
+      githubRepos.addAll(it.split(",").map(String::trim).filter(String::isNotBlank))
+    }
+
+    _deepLinkState.value = DeepLinkConfirmationState(
+      rawUri = uri.toString(),
+      type = DeepLinkType.ADD_REPOS,
+      repoUrls = repoUrls.distinct(),
+      githubRepos = githubRepos.distinct()
+    )
+  }
+
+  fun fetchGitHubRepo(repoInput: String) {
+    if (repoInput.isBlank()) return
+    batchImportStoreSources(repoInput)
   }
 
   fun syncCustomHost(url: String) {
     if (url.isBlank()) return
+    batchImportStoreSources(url)
+  }
+
+  /**
+   * Supports adding single or multiple GitHub repos, JSON repository URLs, or raw JSON app lists at once.
+   */
+  fun batchImportStoreSources(rawInput: String) {
+    if (rawInput.isBlank()) return
     viewModelScope.launch {
       _isSearchingRepo.value = true
       try {
-        val items = StoreRepository.syncCustomHost(url)
-        if (items.isNotEmpty()) {
-          val updated = items + _storeApps.value.filter { existing -> items.none { it.id == existing.id } }
-          _storeApps.value = StoreRepository.updateInstalledStatus(context, updated)
-          showMessage("${items.size}件のアプリを独自ホストから同期しました")
+        val (newRepos, newApps) = StoreRepository.batchImportSources(rawInput)
+        if (newRepos.isNotEmpty()) {
+          val existingIds = newRepos.map { it.id }.toSet()
+          _repositories.value = newRepos + _repositories.value.filter { it.id !in existingIds }
+        }
+        if (newApps.isNotEmpty()) {
+          val newIds = newApps.map { it.id }.toSet()
+          val merged = newApps + _storeApps.value.filter { it.id !in newIds }
+          _storeApps.value = StoreRepository.updateInstalledStatus(context, merged)
+          showMessage("${newApps.size} 件のアプリ（リポジトリ ${newRepos.size} 件）を一括追加・同期しました")
         } else {
-          showMessage("独自ホストからアプリを取得できませんでした")
+          showMessage("有効なアプリまたはリリースが見つかりませんでした。入力内容を確認してください。")
         }
       } catch (e: Exception) {
-        showMessage("同期エラー: ${e.message}")
+        showMessage("一括同期エラー: ${e.message}")
       } finally {
         _isSearchingRepo.value = false
       }
     }
   }
 
-  fun downloadAndInstallStoreApp(item: StoreAppItem) {
+  fun downloadAndInstallStoreApp(item: StoreAppItem, overrideDownloadUrl: String? = null) {
     viewModelScope.launch {
-      StoreRepository.downloadApkStream(context, item).collect { progress ->
+      StoreRepository.downloadApkStream(context, item, overrideDownloadUrl).collect { progress ->
         val map = _downloadProgressMap.value.toMutableMap()
         map[item.id] = progress
         _downloadProgressMap.value = map
 
         if (progress.targetFile != null && progress.progress >= 1.0f) {
-          // Finished download -> handover to installer!
           showMessage("ダウンロード完了: ${item.name} をインストール準備中...")
           parsePackageFromFile(progress.targetFile)
         } else if (progress.isError) {
@@ -290,6 +533,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val list = AppsManagerRepository.loadInstalledApps(context)
         _installedApps.value = list
         _storeApps.value = StoreRepository.updateInstalledStatus(context, _storeApps.value)
+        _selectedStoreApp.value = _selectedStoreApp.value?.let { selected ->
+          StoreRepository.updateInstalledStatus(context, listOf(selected)).firstOrNull()
+        }
       } catch (e: Exception) {
         showMessage("アプリ一覧の取得エラー: ${e.message}")
       } finally {
@@ -298,28 +544,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
   }
 
-  fun batchBackupSelected(backupDataWithRoot: Boolean = false) {
+  // BACKUP FORMAT & EXPORT ACTIONS
+  fun setBackupExportFormat(format: BackupExportFormat) {
+    _selectedBackupFormat.value = format
+  }
+
+  fun batchBackupSelected(
+    backupDataWithRoot: Boolean = false,
+    format: BackupExportFormat = _selectedBackupFormat.value
+  ) {
     val selected = _selectedPackages.value.toList()
     if (selected.isEmpty()) return
 
     viewModelScope.launch {
       var successCount = 0
       for (pkg in selected) {
-        val res = BackupManager.backupApp(context, pkg, backupDataWithRoot)
+        val res = BackupManager.backupApp(context, pkg, backupDataWithRoot, format)
         if (res.isSuccess) successCount++
       }
-      showMessage("$successCount 件のアプリのバックアップが完了しました")
+      showMessage("$successCount 件のアプリを .${format.extension} 形式で一括バックアップしました")
       clearSelection()
       refreshBackups()
     }
   }
 
-  fun backupSingleApp(packageName: String, backupDataWithRoot: Boolean = false) {
+  fun backupSingleApp(
+    packageName: String,
+    backupDataWithRoot: Boolean = false,
+    format: BackupExportFormat = _selectedBackupFormat.value
+  ) {
     viewModelScope.launch {
-      val res = BackupManager.backupApp(context, packageName, backupDataWithRoot)
+      val res = BackupManager.backupApp(context, packageName, backupDataWithRoot, format)
       if (res.isSuccess) {
         val app = res.getOrNull()
-        showMessage("「${app?.appLabel ?: packageName}」のバックアップが完了しました")
+        showMessage("「${app?.appLabel ?: packageName}」を .${format.extension} 形式で書き出しました")
         refreshBackups()
       } else {
         showMessage("バックアップ失敗: ${res.exceptionOrNull()?.message}")
@@ -356,7 +614,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         clearSelection()
         refreshInstalledApps()
       } else {
-        // Non root: sequentially launch uninstall requests
         for (pkg in selected) {
           AppsManagerRepository.requestUninstall(context, pkg)
         }
@@ -384,14 +641,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
   }
 
-  // REMOTE SERVER ACTIONS
+  // REMOTE SERVER & CLOUDFLARE TUNNEL ACTIONS
   fun toggleRemoteServer() {
     if (remoteServerStatus.value.isRunning) {
       remoteServer.stop()
       showMessage("PC遠隔導入サーバーを停止しました")
     } else {
-      remoteServer.start()
-      showMessage("PC遠隔導入サーバーを開始しました")
+      remoteServer.start(remoteServerStatus.value.port)
+      showMessage("PC遠隔導入サーバーを開始しました (Port ${remoteServerStatus.value.port})")
+    }
+  }
+
+  fun updateRemotePort(newPort: Int) {
+    if (newPort !in 1024..65535) {
+      showMessage("ポート番号は 1024 〜 65535 の範囲で指定してください")
+      return
+    }
+    remoteServer.setPort(newPort)
+    showMessage("遠隔サーバーのポートを :$newPort に変更しました")
+  }
+
+  fun setCfTunnelToken(token: String) {
+    remoteServer.setCfTunnelToken(token)
+  }
+
+  fun toggleCloudflareTunnel(customPublicHost: String = "") {
+    if (remoteServerStatus.value.cfTunnelRunning) {
+      remoteServer.stopCloudflareTunnel()
+      showMessage("Cloudflare Tunnel 連携を停止しました")
+    } else {
+      if (!remoteServerStatus.value.isRunning) {
+        remoteServer.start(remoteServerStatus.value.port)
+      }
+      remoteServer.startCloudflareTunnel(customPublicHost)
+      showMessage("Cloudflare Tunnel 連携を開始しました")
     }
   }
 

@@ -28,16 +28,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.LibraryAdd
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -49,6 +53,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -69,6 +74,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.ApkArchiveInfo
+import com.example.model.ArchiveFormat
 import com.example.model.InstallStatus
 import com.example.ui.MainViewModel
 import com.example.ui.components.AppHeader
@@ -87,12 +93,15 @@ fun InstallerScreen(
 ) {
   val parsedArchive by viewModel.parsedArchive.collectAsState()
   val isParsing by viewModel.isParsing.collectAsState()
+  val directUrlProgress by viewModel.directUrlProgress.collectAsState()
   val installState by viewModel.installSessionState.collectAsState()
   val optimizationState by viewModel.optimizationState.collectAsState()
 
   var useRootInstall by remember { mutableStateOf(false) }
+  var directApkUrl by remember { mutableStateOf("") }
+  var showAllFormats by remember { mutableStateOf(false) }
 
-  // File picker launcher
+  // Single file picker launcher (any archive or APK)
   val filePicker = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.GetContent()
   ) { uri: Uri? ->
@@ -101,7 +110,17 @@ fun InstallerScreen(
     }
   }
 
+  // Multi-file picker launcher for selecting multiple Split APKs (base.apk + config.*.apk) simultaneously
+  val multiApkPicker = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.GetMultipleContents()
+  ) { uris: List<Uri> ->
+    if (uris.isNotEmpty()) {
+      viewModel.parseMultiplePackageUris(uris)
+    }
+  }
+
   val scrollState = rememberScrollState()
+  val supportedFormats = remember { ArchiveFormat.values().filter { it != ArchiveFormat.UNKNOWN } }
 
   Column(
     modifier = modifier
@@ -111,7 +130,7 @@ fun InstallerScreen(
   ) {
     AppHeader(
       title = "万能インストーラー",
-      subtitle = "あらゆる形式 (.apk, .xapk, .apks, .apkm, .zip) を解析・導入",
+      subtitle = "25種類以上の特殊パッケージ・複数APK・直リンクURLに完全対応 (by Hikaproj)",
       isRooted = optimizationState.isRooted
     )
 
@@ -119,76 +138,219 @@ fun InstallerScreen(
     Card(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(horizontal = 20.dp, vertical = 8.dp)
+        .padding(horizontal = 20.dp, vertical = 6.dp)
         .testTag("file_picker_card"),
       shape = RoundedCornerShape(20.dp),
       colors = CardDefaults.cardColors(
         containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
       )
     ) {
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(16.dp)
-          .border(
-            width = 1.5.dp,
-            color = TechPrimary.copy(alpha = 0.4f),
-            shape = RoundedCornerShape(16.dp)
-          )
-          .clickable { filePicker.launch("*/*") }
-          .padding(vertical = 28.dp, horizontal = 16.dp),
-        contentAlignment = Alignment.Center
-      ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-          Box(
-            modifier = Modifier
-              .size(56.dp)
-              .clip(CircleShape)
-              .background(TechPrimary.copy(alpha = 0.15f)),
-            contentAlignment = Alignment.Center
-          ) {
-            Icon(
-              imageVector = Icons.Default.FolderOpen,
-              contentDescription = "ファイル選択",
-              tint = TechPrimary,
-              modifier = Modifier.size(30.dp)
+      Column(modifier = Modifier.padding(16.dp)) {
+        Box(
+          modifier = Modifier
+            .fillMaxWidth()
+            .border(
+              width = 1.5.dp,
+              color = TechPrimary.copy(alpha = 0.4f),
+              shape = RoundedCornerShape(16.dp)
+            )
+            .clickable { filePicker.launch("*/*") }
+            .padding(vertical = 22.dp, horizontal = 16.dp),
+          contentAlignment = Alignment.Center
+        ) {
+          Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(
+              modifier = Modifier
+                .size(52.dp)
+                .clip(CircleShape)
+                .background(TechPrimary.copy(alpha = 0.15f)),
+              contentAlignment = Alignment.Center
+            ) {
+              Icon(
+                imageVector = Icons.Default.FolderOpen,
+                contentDescription = "ファイル選択",
+                tint = TechPrimary,
+                modifier = Modifier.size(28.dp)
+              )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+              text = "単体・アーカイブパッケージを選択",
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+              text = "APK / XAPK / APKS / APKM / OMNI / HPJPKG / TAR.GZ / AAB 等25形式以上",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
             )
           }
+        }
 
-          Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Multi-APK selection button (fixes Split APKs / multiple loose APK files installation)
+        OutlinedButton(
+          onClick = { multiApkPicker.launch("*/*") },
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("multi_apk_picker_button"),
+          shape = RoundedCornerShape(14.dp)
+        ) {
+          Icon(Icons.Default.LibraryAdd, contentDescription = null, tint = TechPrimary, modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(8.dp))
           Text(
-            text = "パッケージファイルを選択",
-            style = MaterialTheme.typography.titleMedium,
+            text = "複数のAPKを選択して一括バンドル導入 (base + split_config)",
+            fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface
+            color = TechPrimary
           )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Expandable 25+ format badges
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .clickable { showAllFormats = !showAllFormats }
+            .padding(vertical = 4.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
+        ) {
           Text(
-            text = "タップして端末内の APK / XAPK / APKS / ZIP を参照",
-            style = MaterialTheme.typography.bodyMedium,
+            text = "対応インストール形式一覧 (${supportedFormats.size} 種類)",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
+          Icon(
+            imageVector = if (showAllFormats) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+            contentDescription = "形式一覧を開閉",
+            tint = TechPrimary,
+            modifier = Modifier.size(18.dp)
+          )
+        }
 
-          Spacer(modifier = Modifier.height(12.dp))
-          FlowRow(
-            horizontalArrangement = Arrangement.Center,
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-          ) {
-            listOf("APK", "XAPK (OBB同梱)", "APKS (分割)", "APKM", "アプリバンドル").forEach { tag ->
-              Surface(
-                shape = RoundedCornerShape(6.dp),
-                color = MaterialTheme.colorScheme.surface,
-                modifier = Modifier.padding(horizontal = 3.dp)
-              ) {
-                Text(
-                  text = tag,
-                  fontSize = 11.sp,
-                  fontFamily = JetBrainsMono,
-                  color = TechPrimary,
-                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                )
-              }
+        val visibleFormats = if (showAllFormats) supportedFormats else supportedFormats.take(8)
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+          verticalArrangement = Arrangement.spacedBy(4.dp),
+          modifier = Modifier.padding(top = 4.dp)
+        ) {
+          visibleFormats.forEach { fmt ->
+            Surface(
+              shape = RoundedCornerShape(6.dp),
+              color = MaterialTheme.colorScheme.surface
+            ) {
+              Text(
+                text = ".${fmt.primaryExtension}",
+                fontSize = 10.sp,
+                fontFamily = JetBrainsMono,
+                color = TechPrimary,
+                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+              )
             }
           }
+          if (!showAllFormats && supportedFormats.size > 8) {
+            Surface(
+              shape = RoundedCornerShape(6.dp),
+              color = TechPrimary.copy(alpha = 0.15f),
+              modifier = Modifier.clickable { showAllFormats = true }
+            ) {
+              Text(
+                text = "+他${supportedFormats.size - 8}形式を表示",
+                fontSize = 10.sp,
+                fontFamily = JetBrainsMono,
+                fontWeight = FontWeight.Bold,
+                color = TechPrimary,
+                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+              )
+            }
+          }
+        }
+      }
+    }
+
+    // Direct URL APK / Package Installation Card
+    Card(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 20.dp, vertical = 6.dp)
+        .testTag("direct_url_install_card"),
+      shape = RoundedCornerShape(18.dp),
+      colors = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.surface
+      )
+    ) {
+      Column(modifier = Modifier.padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Icon(Icons.Default.Link, contentDescription = null, tint = TechPrimary, modifier = Modifier.size(20.dp))
+          Spacer(modifier = Modifier.width(8.dp))
+          Column {
+            Text(
+              text = "APK / パッケージ直リンクから直接インストール",
+              style = MaterialTheme.typography.titleSmall,
+              fontWeight = FontWeight.Bold
+            )
+            Text(
+              text = "HTTP/HTTPS の直リンク (.apk, .xapk, .apks, .omni 等) を直接ダウンロード＆解析",
+              fontSize = 11.sp,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          OutlinedTextField(
+            value = directApkUrl,
+            onValueChange = { directApkUrl = it },
+            placeholder = { Text("https://example.com/release/app-v1.0.apk", fontSize = 12.sp) },
+            modifier = Modifier
+              .weight(1f)
+              .testTag("direct_url_input"),
+            shape = RoundedCornerShape(12.dp),
+            singleLine = true
+          )
+          Spacer(modifier = Modifier.width(8.dp))
+          Button(
+            onClick = { viewModel.installFromDirectUrl(directApkUrl) },
+            enabled = directApkUrl.isNotBlank() && directUrlProgress == null,
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = TechPrimary),
+            modifier = Modifier
+              .height(52.dp)
+              .testTag("direct_url_fetch_button")
+          ) {
+            Icon(Icons.Default.CloudDownload, contentDescription = "直リンク取得", modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("取得", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+          }
+        }
+
+        directUrlProgress?.let { prog ->
+          Spacer(modifier = Modifier.height(10.dp))
+          LinearProgressIndicator(
+            progress = { prog.progress },
+            modifier = Modifier
+              .fillMaxWidth()
+              .height(6.dp)
+              .clip(RoundedCornerShape(3.dp))
+          )
+          Spacer(modifier = Modifier.height(4.dp))
+          Text(
+            text = prog.statusMessage,
+            fontSize = 11.sp,
+            fontFamily = JetBrainsMono,
+            color = if (prog.isError) AccentDanger else TechPrimary
+          )
         }
       }
     }
@@ -207,7 +369,7 @@ fun InstallerScreen(
           CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.5.dp)
           Spacer(modifier = Modifier.width(16.dp))
           Text(
-            text = "パッケージ構造と署名を解析中...",
+            text = "パッケージ構造・Split ABI互換性・署名を解析中...",
             style = MaterialTheme.typography.bodyLarge
           )
         }
@@ -346,25 +508,25 @@ fun ParsedPackageCard(
         horizontalArrangement = Arrangement.SpaceBetween
       ) {
         Column {
-          Text("パッケージ容量", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          Text("展開後APK合計容量", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
           Text(
-            text = "${archive.totalSizeBytes / 1024 / 1024} MB",
+            text = "${(archive.totalSizeBytes / 1024 / 1024).coerceAtLeast(1)} MB",
             fontSize = 14.sp,
             fontFamily = JetBrainsMono,
             fontWeight = FontWeight.Bold
           )
         }
         Column {
-          Text("Target SDK", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          Text("Target / Min SDK", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
           Text(
-            text = "API ${archive.targetSdk}",
+            text = "API ${archive.targetSdk} (Min ${archive.minSdk})",
             fontSize = 14.sp,
             fontFamily = JetBrainsMono,
             fontWeight = FontWeight.Bold
           )
         }
         Column {
-          Text("互換性", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          Text("端末互換性", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
           Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
               imageVector = if (archive.isCompatible) Icons.Default.CheckCircle else Icons.Default.Warning,
@@ -374,7 +536,7 @@ fun ParsedPackageCard(
             )
             Spacer(modifier = Modifier.width(4.dp))
             Text(
-              text = if (archive.isCompatible) "対応済み" else "要確認",
+              text = if (archive.isCompatible) "ABI適合済" else "要確認",
               fontSize = 12.sp,
               fontWeight = FontWeight.Bold,
               color = if (archive.isCompatible) AccentSuccess else AccentWarning
@@ -387,7 +549,7 @@ fun ParsedPackageCard(
       if (archive.splits.isNotEmpty()) {
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-          text = "構成モジュール (${archive.splits.size} 個のSplit APK)",
+          text = "バンドル構成モジュール (${archive.splits.size} 個のAPK・非互換ABI自動除外済)",
           fontSize = 12.sp,
           fontWeight = FontWeight.Bold,
           color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -407,7 +569,7 @@ fun ParsedPackageCard(
               horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically
             ) {
-              Row(verticalAlignment = Alignment.CenterVertically) {
+              Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                 Icon(
                   imageVector = if (split.isBase) Icons.Default.Archive else Icons.Default.Layers,
                   contentDescription = null,
@@ -431,7 +593,7 @@ fun ParsedPackageCard(
               }
 
               Text(
-                text = "${split.sizeBytes / 1024} KB",
+                text = "${(split.sizeBytes / 1024).coerceAtLeast(1)} KB",
                 fontSize = 11.sp,
                 fontFamily = JetBrainsMono,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -517,8 +679,8 @@ fun ParsedPackageCard(
         Icon(Icons.Default.Download, contentDescription = null)
         Spacer(modifier = Modifier.width(8.dp))
         Text(
-          text = if (useRootInstall) "Rootサイレントインストール実行" else "インストール実行",
-          fontSize = 15.sp,
+          text = if (useRootInstall) "Rootサイレントインストール実行" else "インストール実行 (${archive.splits.size} APKセッション)",
+          fontSize = 14.sp,
           fontWeight = FontWeight.Bold
         )
       }
