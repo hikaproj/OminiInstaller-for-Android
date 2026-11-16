@@ -8,9 +8,15 @@ import com.example.installer.PackageParser
 import com.example.model.ArchiveFormat
 import com.example.model.BackupExportFormat
 import com.example.model.DeepLinkType
+import com.example.remote.RemoteWebConsoleHtml
 import com.example.store.StoreRepository
 import com.example.ui.MainViewModel
+import java.io.File
+import java.io.FileOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -48,6 +54,79 @@ class ExampleRobolectricTest {
     assertTrue(exportFormats.isNotEmpty())
     assertEquals(BackupExportFormat.TAR_GZ, BackupExportFormat.fromFileName("backup_v1.tar.gz"))
     assertEquals(BackupExportFormat.APKS, BackupExportFormat.fromFileName("app.apks"))
+  }
+
+  @Test
+  fun `verify XAPK parser extracts split APKs and filters conflicting ABIs`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val xapkFile = File(context.cacheDir, "test_sample_bundle.xapk")
+
+    ZipOutputStream(FileOutputStream(xapkFile)).use { zos ->
+      val manifestJson = """
+        {
+          "xapk_version": 2,
+          "package_name": "com.hikaproj.samplexapk",
+          "name": "Sample XAPK App",
+          "version_name": "2.4.0",
+          "version_code": "240",
+          "split_apks": [
+            { "file": "com.hikaproj.samplexapk.apk", "id": "base" },
+            { "file": "config.arm64_v8a.apk", "id": "config.arm64_v8a" },
+            { "file": "config.armeabi_v7a.apk", "id": "config.armeabi_v7a" },
+            { "file": "config.ja.apk", "id": "config.ja" }
+          ]
+        }
+      """.trimIndent()
+      zos.putNextEntry(ZipEntry("manifest.json"))
+      zos.write(manifestJson.toByteArray())
+      zos.closeEntry()
+
+      // Write dummy APK files with valid ZIP magic bytes
+      listOf(
+        "com.hikaproj.samplexapk.apk",
+        "config.arm64_v8a.apk",
+        "config.armeabi_v7a.apk",
+        "config.ja.apk"
+      ).forEach { entryName ->
+        zos.putNextEntry(ZipEntry(entryName))
+        zos.write(ByteArray(256) { 0x50 })
+        zos.closeEntry()
+      }
+    }
+
+    val session = PackageParser.parsePackage(context, null, xapkFile)
+    assertEquals(ArchiveFormat.XAPK, session.format)
+    assertEquals("Sample XAPK App", session.appLabel)
+    assertEquals("com.hikaproj.samplexapk", session.packageName)
+    assertEquals("2.4.0", session.versionName)
+    // Base APK must be first
+    assertTrue(session.splits.first().isBase)
+    // Conflicting secondary ABI split must be filtered out so at most 1 ABI split remains alongside base + lang split
+    assertTrue(session.splits.size in 2..3)
+    xapkFile.delete()
+  }
+
+  @Test
+  fun `verify RemoteWebConsoleHtml is light-based with dark mode, multi-language, and zero emojis`() {
+    val html = RemoteWebConsoleHtml.buildHtml(
+      deviceModel = "Pixel 8 Pro",
+      osVer = "14",
+      supportedAbis = "arm64-v8a, armeabi-v7a",
+      status = com.example.model.RemoteServerStatus(
+        isRunning = true,
+        port = 8080,
+        allowRemoteAppManagement = true,
+        allowRemotePermissionEdit = true,
+        allowRemoteUrlInstall = true
+      )
+    )
+    assertTrue(html.contains("data-theme=\"light\""))
+    assertTrue(html.contains("[data-theme=\"dark\"]"))
+    assertTrue(html.contains("const I18N ="))
+    assertTrue(html.contains("<svg"))
+    // Ensure no supplementary plane emoji surrogates exist in the HTML
+    val hasEmoji = html.any { Character.isHighSurrogate(it) || Character.isLowSurrogate(it) }
+    assertFalse("Remote web console HTML must not contain emojis", hasEmoji)
   }
 
   @Test

@@ -22,10 +22,12 @@ import com.example.optimizer.AppsManagerRepository
 import com.example.remote.RemoteInstallerServer
 import com.example.store.DownloadProgress
 import com.example.store.StoreRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 enum class NavigationTab(val label: String) {
@@ -119,15 +121,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   private val remoteServer: RemoteInstallerServer = RemoteInstallerServer(
     context = context,
     onPackageReceived = { file ->
-      handleFileReceivedFromRemote(file)
+      handleFileReceivedFromRemote(file, null, false)
     },
     onDirectUrlReceived = { url ->
       installFromDirectUrl(url)
     },
     onRemoteStateChanged = {
       refreshInstalledApps()
+      refreshBackups()
       checkOptimization()
-    }
+    },
+    onPackageReceivedAdvanced = { file, overrideMeta, autoInstall ->
+      handleFileReceivedFromRemote(file, overrideMeta, autoInstall)
+    },
+    onMultiplePackagesReceived = { files, autoInstall ->
+      handleMultipleFilesReceivedFromRemote(files, autoInstall)
+    },
+    getStoreAppsProvider = { _storeApps.value },
+    onBatchImportStoreSources = { rawInput -> batchImportStoreSources(rawInput) },
+    onInstallStoreApp = { item -> downloadAndInstallStoreApp(item) }
   )
   val remoteServerStatus = remoteServer.status
 
@@ -169,14 +181,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     _snackbarMessage.value = null
   }
 
-  // INSTALLER ACTIONS
+  // INSTALLER ACTIONS (Run heavy IO & XAPK extraction on Dispatchers.IO)
   fun parsePackageFromUri(uri: Uri) {
     viewModelScope.launch {
       _isParsing.value = true
       try {
-        val fileName = PackageParser.getFileNameFromUri(context, uri)
-        val tempFile = PackageParser.copyUriToTempFile(context, uri, fileName)
-        val info = PackageParser.parsePackage(context, uri, tempFile)
+        val info = withContext(Dispatchers.IO) {
+          val fileName = PackageParser.getFileNameFromUri(context, uri)
+          val tempFile = PackageParser.copyUriToTempFile(context, uri, fileName)
+          PackageParser.parsePackage(context, uri, tempFile, deleteInputIfExtracted = true)
+        }
         _parsedArchive.value = info
         PackageInstallerManager.resetState()
         _currentTab.value = NavigationTab.INSTALLER
@@ -197,16 +211,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     viewModelScope.launch {
       _isParsing.value = true
       try {
-        val copiedFiles = uris.mapIndexed { idx, uri ->
-          val rawName = PackageParser.getFileNameFromUri(context, uri)
-          val safeName = if (rawName.endsWith(".apk", ignoreCase = true)) rawName else "split_${idx}_$rawName.apk"
-          PackageParser.copyUriToTempFile(context, uri, safeName)
+        val (count, info) = withContext(Dispatchers.IO) {
+          val copiedFiles = uris.mapIndexed { idx, uri ->
+            val rawName = PackageParser.getFileNameFromUri(context, uri)
+            val safeName = if (rawName.endsWith(".apk", ignoreCase = true)) rawName else "split_${idx}_$rawName.apk"
+            PackageParser.copyUriToTempFile(context, uri, safeName)
+          }
+          val parsed = PackageParser.parseMultipleApkFiles(context, copiedFiles)
+          copiedFiles.forEach { if (it.exists()) it.delete() }
+          Pair(copiedFiles.size, parsed)
         }
-        val info = PackageParser.parseMultipleApkFiles(context, copiedFiles)
         _parsedArchive.value = info
         PackageInstallerManager.resetState()
         _currentTab.value = NavigationTab.INSTALLER
-        showMessage("${copiedFiles.size} 個のAPKをマルチAPKバンドルとして統合解析しました")
+        showMessage("$count 個のAPKをマルチAPKバンドルとして統合解析しました")
       } catch (e: Exception) {
         showMessage("複数APK解析エラー: ${e.message}")
       } finally {
@@ -238,14 +256,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
   }
 
-  fun parsePackageFromFile(file: File) {
+  fun parsePackageFromFile(
+    file: File,
+    overrideMeta: AppMetadataOverride? = null,
+    autoStartInstall: Boolean = false
+  ) {
     viewModelScope.launch {
       _isParsing.value = true
       try {
-        val info = PackageParser.parsePackage(context, null, file)
-        _parsedArchive.value = info
+        val rawInfo = withContext(Dispatchers.IO) {
+          PackageParser.parsePackage(context, null, file, deleteInputIfExtracted = false)
+        }
+        val finalInfo = if (overrideMeta != null) {
+          rawInfo.copy(
+            appLabel = overrideMeta.customAppLabel.ifBlank { rawInfo.appLabel },
+            packageName = overrideMeta.customPackageName.ifBlank { rawInfo.packageName },
+            versionName = overrideMeta.customVersionName.ifBlank { rawInfo.versionName },
+            versionCode = if (overrideMeta.customVersionCode > 0) overrideMeta.customVersionCode else rawInfo.versionCode,
+            category = overrideMeta.customCategory.ifBlank { rawInfo.category }
+          )
+        } else {
+          rawInfo
+        }
+        _parsedArchive.value = finalInfo
         PackageInstallerManager.resetState()
         _currentTab.value = NavigationTab.INSTALLER
+        if (autoStartInstall) {
+          PackageInstallerManager.installPackage(
+            context = context,
+            archiveInfo = finalInfo,
+            useRoot = _optimizationState.value.isRooted
+          )
+        }
       } catch (e: Exception) {
         showMessage("解析エラー: ${e.message}")
       } finally {
@@ -255,7 +297,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   /**
-   * Allows overriding app name, bundle/package name, version, and genre/category at install time!
+   * Allows overriding app name, bundle/package name, version, and genre/category at install time.
    */
   fun updateParsedArchiveOverrides(
     customAppLabel: String,
@@ -596,25 +638,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
           customVersionCode = newVersionCode,
           customCategory = newCategory
         )
-        val patchedFile = AppsManagerRepository.createModifiedApkFile(
-          context = context,
-          sourceApkPath = app.sourceDir,
-          originalPackageName = app.packageName,
-          newPackageName = newPackageName,
-          originalLabel = app.appLabel,
-          newLabel = newLabel,
-          originalVersionName = app.versionName,
-          newVersionName = newVersionName
-        )
-        val info = PackageParser.parsePackage(context, null, patchedFile).copy(
-          originalPackageName = app.packageName,
-          packageName = newPackageName,
-          appLabel = newLabel,
-          versionName = newVersionName,
-          versionCode = newVersionCode,
-          category = newCategory,
-          iconBitmap = app.iconBitmap
-        )
+        val info = withContext(Dispatchers.IO) {
+          val patchedFile = AppsManagerRepository.createModifiedApkFile(
+            context = context,
+            sourceApkPath = app.sourceDir,
+            originalPackageName = app.packageName,
+            newPackageName = newPackageName,
+            originalLabel = app.appLabel,
+            newLabel = newLabel,
+            originalVersionName = app.versionName,
+            newVersionName = newVersionName
+          )
+          PackageParser.parsePackage(context, null, patchedFile).copy(
+            originalPackageName = app.packageName,
+            packageName = newPackageName,
+            appLabel = newLabel,
+            versionName = newVersionName,
+            versionCode = newVersionCode,
+            category = newCategory,
+            iconBitmap = app.iconBitmap
+          )
+        }
         _inspectingApp.value = null
         _parsedArchive.value = info
         PackageInstallerManager.resetState()
@@ -791,10 +835,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
   }
 
-  private fun handleFileReceivedFromRemote(file: File) {
+  private fun handleFileReceivedFromRemote(
+    file: File,
+    overrideMeta: AppMetadataOverride?,
+    autoInstall: Boolean
+  ) {
     viewModelScope.launch {
       showMessage("PCからパッケージを受信しました: ${file.name}")
-      parsePackageFromFile(file)
+      parsePackageFromFile(file, overrideMeta, autoInstall)
+    }
+  }
+
+  private fun handleMultipleFilesReceivedFromRemote(
+    files: List<File>,
+    autoInstall: Boolean
+  ) {
+    viewModelScope.launch {
+      _isParsing.value = true
+      try {
+        val info = withContext(Dispatchers.IO) {
+          PackageParser.parseMultipleApkFiles(context, files)
+        }
+        _parsedArchive.value = info
+        PackageInstallerManager.resetState()
+        _currentTab.value = NavigationTab.INSTALLER
+        showMessage("PCから ${files.size} 個のAPKバンドルを受信しました")
+        if (autoInstall) {
+          PackageInstallerManager.installPackage(
+            context = context,
+            archiveInfo = info,
+            useRoot = _optimizationState.value.isRooted
+          )
+        }
+      } catch (e: Exception) {
+        showMessage("遠隔マルチAPK解析エラー: ${e.message}")
+      } finally {
+        _isParsing.value = false
+      }
     }
   }
 

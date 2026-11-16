@@ -11,9 +11,10 @@ import android.os.Environment
 import android.provider.Settings
 import android.util.Log
 import com.example.model.ApkArchiveInfo
-import com.example.model.ArchiveFormat
+import com.example.model.AppMetadataOverride
 import com.example.model.InstallSessionState
 import com.example.model.InstallStatus
+import com.example.optimizer.AppsManagerRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -80,10 +81,10 @@ object PackageInstallerManager {
         isRootInstall = useRoot
       )
 
-      // Save custom metadata overrides (bundle name, app label, version, category) so they persist
-      com.example.optimizer.AppsManagerRepository.saveMetadataOverride(
+      // Persist custom metadata overrides (bundle name, app label, version, category)
+      AppsManagerRepository.saveMetadataOverride(
         context,
-        com.example.model.AppMetadataOverride(
+        AppMetadataOverride(
           originalPackageName = archiveInfo.originalPackageName.ifBlank { archiveInfo.packageName },
           customAppLabel = archiveInfo.appLabel,
           customPackageName = archiveInfo.packageName,
@@ -93,11 +94,11 @@ object PackageInstallerManager {
         )
       )
 
-      // 1. Process OBB files if any
+      // 1. Process OBB files if any (XAPK / OBB_ZIP)
       if (archiveInfo.obbEntries.isNotEmpty()) {
         _sessionState.value = _sessionState.value.copy(
           progress = 0.15f,
-          currentTask = "OBBデータファイルを展開・配置中..."
+          currentTask = "OBB拡張データを配置中..."
         )
         copyObbFiles(archiveInfo)
       }
@@ -120,14 +121,20 @@ object PackageInstallerManager {
 
   private fun copyObbFiles(archiveInfo: ApkArchiveInfo) {
     try {
-      val obbBaseDir = File(Environment.getExternalStorageDirectory(), "Android/obb/${archiveInfo.packageName}")
-      obbBaseDir.mkdirs()
+      val extRoot = Environment.getExternalStorageDirectory()
+      val targetPkg = archiveInfo.originalPackageName.ifBlank { archiveInfo.packageName }
+      val defaultObbDir = File(extRoot, "Android/obb/$targetPkg")
+      defaultObbDir.mkdirs()
 
       val sourceDir = File(archiveInfo.filePath)
       for (obb in archiveInfo.obbEntries) {
         val srcFile = File(sourceDir, obb.fileName)
-        if (srcFile.exists()) {
-          val destFile = File(obbBaseDir, obb.fileName)
+        if (srcFile.exists() && srcFile.isFile) {
+          val destFile = if (obb.relativePath.startsWith("Android/obb/", ignoreCase = true)) {
+            File(extRoot, obb.relativePath).also { it.parentFile?.mkdirs() }
+          } else {
+            File(defaultObbDir, obb.fileName)
+          }
           srcFile.copyTo(destFile, overwrite = true)
           Log.d(TAG, "Copied OBB: ${destFile.absolutePath}")
         }
@@ -153,7 +160,7 @@ object PackageInstallerManager {
           notifyInstallResult(
             success = false,
             packageName = archiveInfo.packageName,
-            message = "「提供元不明のアプリのインストール」権限をOmniInstallerに許可してください。"
+            message = "「提供元不明のアプリのインストール」権限を許可してください。"
           )
           return@withContext
         }
@@ -161,13 +168,14 @@ object PackageInstallerManager {
 
       data class FileToWrite(val file: File, val entryName: String)
       val filesToInstall = mutableListOf<FileToWrite>()
-      val usedEntryNames = mutableSetOf<String>()
 
       val sourceFileOrDir = File(archiveInfo.filePath)
-      val isMetadataOverridden = archiveInfo.packageName != archiveInfo.originalPackageName
+      val isMetadataOverridden = archiveInfo.packageName != archiveInfo.originalPackageName &&
+        archiveInfo.originalPackageName.isNotBlank()
+
       if (sourceFileOrDir.isFile) {
         val fileToUse = if (isMetadataOverridden) {
-          com.example.optimizer.AppsManagerRepository.createModifiedApkFile(
+          AppsManagerRepository.createModifiedApkFile(
             context = context,
             sourceApkPath = sourceFileOrDir.absolutePath,
             originalPackageName = archiveInfo.originalPackageName,
@@ -182,33 +190,49 @@ object PackageInstallerManager {
         }
         filesToInstall.add(FileToWrite(fileToUse, "base.apk"))
       } else if (sourceFileOrDir.isDirectory) {
-        for ((idx, split) in archiveInfo.splits.withIndex()) {
-          val f = if (split.filePath.isNotBlank() && File(split.filePath).exists()) {
+        var splitCounter = 1
+        var hasAddedBase = false
+
+        for (split in archiveInfo.splits) {
+          val candidateFile = if (split.filePath.isNotBlank() && File(split.filePath).exists()) {
             File(split.filePath)
           } else {
             File(sourceFileOrDir, split.name)
           }
-          if (f.exists() && f.isFile && f.length() > 0) {
-            var candidateName = if (split.isBase) {
+          if (candidateFile.exists() && candidateFile.isFile && candidateFile.length() > 0) {
+            val isBaseSplit = split.isBase && !hasAddedBase
+            val finalFile = if (isBaseSplit && isMetadataOverridden && archiveInfo.splits.size == 1) {
+              AppsManagerRepository.createModifiedApkFile(
+                context = context,
+                sourceApkPath = candidateFile.absolutePath,
+                originalPackageName = archiveInfo.originalPackageName,
+                newPackageName = archiveInfo.packageName,
+                originalLabel = "",
+                newLabel = archiveInfo.appLabel,
+                originalVersionName = "",
+                newVersionName = archiveInfo.versionName
+              )
+            } else {
+              candidateFile
+            }
+            val entryName = if (isBaseSplit) {
+              hasAddedBase = true
               "base.apk"
             } else {
-              val clean = split.name.substringAfter("_").replace("[^a-zA-Z0-9_.-]".toRegex(), "_")
-              if (clean.endsWith(".apk", ignoreCase = true)) clean else "$clean.apk"
+              val sName = "split_${splitCounter}.apk"
+              splitCounter++
+              sName
             }
-            if (usedEntryNames.contains(candidateName)) {
-              candidateName = "split_${idx}_$candidateName"
-            }
-            usedEntryNames.add(candidateName)
-            filesToInstall.add(FileToWrite(f, candidateName))
+            filesToInstall.add(FileToWrite(finalFile, entryName))
           }
         }
 
         // Fallback if splits list didn't resolve files
         if (filesToInstall.isEmpty()) {
-          sourceFileOrDir.listFiles { f -> f.isFile && f.name.endsWith(".apk", ignoreCase = true) }
+          sourceFileOrDir.listFiles { f -> f.isFile && f.name.endsWith(".apk", ignoreCase = true) && f.length() > 0 }
             ?.sortedByDescending { it.length() }
             ?.forEachIndexed { idx, f ->
-              val entryName = if (idx == 0) "base.apk" else "split_${idx}_${f.name.replace("[^a-zA-Z0-9_.-]".toRegex(), "_")}"
+              val entryName = if (idx == 0) "base.apk" else "split_${idx}.apk"
               filesToInstall.add(FileToWrite(f, entryName))
             }
         }
@@ -222,15 +246,6 @@ object PackageInstallerManager {
 
       val packageInstaller = context.packageManager.packageInstaller
       val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
-        if (
-          !isMetadataOverridden &&
-          archiveInfo.packageName.isNotBlank() &&
-          archiveInfo.packageName.contains(".") &&
-          !archiveInfo.packageName.startsWith("unknown") &&
-          !archiveInfo.packageName.startsWith("com.bundle")
-        ) {
-          setAppPackageName(archiveInfo.packageName)
-        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
           setInstallReason(PackageManager.INSTALL_REASON_USER)
         }
@@ -264,8 +279,9 @@ object PackageInstallerManager {
           session.openWrite(item.entryName, 0, item.file.length()).use { out ->
             FileInputStream(item.file).use { inStream ->
               val buffer = ByteArray(65536)
-              var bytesRead: Int
-              while (inStream.read(buffer).also { bytesRead = it } != -1) {
+              while (true) {
+                val bytesRead = inStream.read(buffer)
+                if (bytesRead == -1) break
                 out.write(buffer, 0, bytesRead)
               }
               session.fsync(out)
@@ -317,7 +333,8 @@ object PackageInstallerManager {
 
       val sourceFileOrDir = File(archiveInfo.filePath)
       if (sourceFileOrDir.isFile) {
-        val result = RootHelper.runSu("pm install -r -d \"${sourceFileOrDir.absolutePath}\"")
+        val len = sourceFileOrDir.length()
+        val result = RootHelper.runSu("cat \"${sourceFileOrDir.absolutePath}\" | pm install -r -d -S $len")
         if (result.success && result.output.contains("Success", ignoreCase = true)) {
           notifyInstallResult(true, archiveInfo.packageName, "Rootサイレントインストールに成功しました")
         } else {
@@ -330,15 +347,24 @@ object PackageInstallerManager {
         val sessionId = sessionIdMatch?.groupValues?.get(1)
 
         if (sessionId != null) {
-          for ((idx, split) in archiveInfo.splits.withIndex()) {
+          var splitIdx = 1
+          var wroteBase = false
+          for (split in archiveInfo.splits) {
             val file = if (split.filePath.isNotBlank() && File(split.filePath).exists()) {
               File(split.filePath)
             } else {
               File(sourceFileOrDir, split.name)
             }
-            if (file.exists()) {
-              val entryName = if (split.isBase) "base.apk" else "split_${idx}_${split.name.replace("[^a-zA-Z0-9_.-]".toRegex(), "_")}"
-              RootHelper.runSu("pm install-write -S ${file.length()} $sessionId $entryName \"${file.absolutePath}\"")
+            if (file.exists() && file.length() > 0) {
+              val entryName = if (split.isBase && !wroteBase) {
+                wroteBase = true
+                "base.apk"
+              } else {
+                val n = "split_${splitIdx}.apk"
+                splitIdx++
+                n
+              }
+              RootHelper.runSu("cat \"${file.absolutePath}\" | pm install-write -S ${file.length()} $sessionId $entryName -")
             }
           }
           val commitResult = RootHelper.runSu("pm install-commit $sessionId")

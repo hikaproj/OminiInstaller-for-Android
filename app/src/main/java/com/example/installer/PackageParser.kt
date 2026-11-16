@@ -5,6 +5,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
@@ -24,11 +25,24 @@ import java.io.FileOutputStream
 import java.io.InputStream
 import java.util.zip.GZIPInputStream
 import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 
 object PackageParser {
 
   private const val TAG = "PackageParser"
+
+  private data class ExtractedApkItem(
+    val file: File,
+    val originalFileName: String,
+    val zipEntryPath: String
+  )
+
+  private data class ExtractedObbItem(
+    val file: File,
+    val originalFileName: String,
+    val zipEntryPath: String
+  )
 
   fun getFileNameFromUri(context: Context, uri: Uri): String {
     var name = ""
@@ -74,71 +88,79 @@ object PackageParser {
       }
     } catch (_: Exception) {}
 
-    // Deep check if ZIP archive contains split APKs, OBBs, or nested archives
+    // Inspect ZIP central directory first (reliable for XAPK / APKS / APKM even when renamed to .apk or .zip)
     try {
-      inputFile.inputStream().buffered().use { fis ->
-        ZipInputStream(fis).use { zis ->
-          var entry = zis.nextEntry
-          var apkCount = 0
-          var hasObb = false
-          var hasManifestJson = false
-          var hasInfoJson = false
-          var hasOmniJson = false
-          var hasRootAndroidManifest = false
+      ZipFile(inputFile).use { zip ->
+        var apkCount = 0
+        var hasObb = false
+        var hasManifestJson = false
+        var hasInfoJson = false
+        var hasRootAndroidManifest = false
 
-          while (entry != null) {
-            val name = entry.name.lowercase()
-            if (name == "manifest.json" || name.endsWith("/manifest.json")) hasManifestJson = true
-            if (name == "info.json") hasInfoJson = true
-            if (name == "omni_meta.json") hasOmniJson = true
-            if (name.endsWith(".apk")) apkCount++
-            if (name == "androidmanifest.xml") hasRootAndroidManifest = true
-            if (name.endsWith(".obb")) hasObb = true
-            zis.closeEntry()
-            entry = zis.nextEntry
-          }
-
-          if (hasInfoJson && apkCount > 0) return ArchiveFormat.APKM
-          if (hasObb || (hasManifestJson && apkCount > 0)) return ArchiveFormat.XAPK
-          if (apkCount > 1) return ArchiveFormat.SPLIT_APKS
-          if (apkCount == 1 && !hasRootAndroidManifest) return ArchiveFormat.SPLIT_APKS
+        val entries = zip.entries()
+        while (entries.hasMoreElements()) {
+          val entry = entries.nextElement()
+          if (entry.isDirectory) continue
+          val name = entry.name.lowercase()
+          if (name == "manifest.json" || name.endsWith("/manifest.json")) hasManifestJson = true
+          if (name == "info.json" || name.endsWith("/info.json")) hasInfoJson = true
+          if (name.endsWith(".apk")) apkCount++
+          if (name == "androidmanifest.xml") hasRootAndroidManifest = true
+          if (name.endsWith(".obb")) hasObb = true
         }
+
+        if (hasInfoJson && apkCount > 0) return ArchiveFormat.APKM
+        if (hasObb || (hasManifestJson && apkCount > 0)) return ArchiveFormat.XAPK
+        if (apkCount > 1) return ArchiveFormat.SPLIT_APKS
+        if (apkCount == 1 && !hasRootAndroidManifest) return ArchiveFormat.SPLIT_APKS
       }
     } catch (_: Exception) {}
 
     return ArchiveFormat.APK
   }
 
-  fun parsePackage(context: Context, uri: Uri?, inputFile: File): ApkArchiveInfo {
-    val fileName = inputFile.name
+  fun parsePackage(
+    context: Context,
+    uri: Uri?,
+    inputFile: File,
+    deleteInputIfExtracted: Boolean = false
+  ): ApkArchiveInfo {
+    val fileName = inputFile.name.replaceFirst("^\\d+_".toRegex(), "")
     val format = detectFormat(inputFile, fileName)
 
     return when (format) {
       ArchiveFormat.APK -> parseSingleApk(context, uri, inputFile, fileName, format)
-      ArchiveFormat.APKS_GZIP -> parseGzipPackage(context, uri, inputFile, fileName)
+      ArchiveFormat.APKS_GZIP -> parseGzipPackage(context, uri, inputFile, fileName, deleteInputIfExtracted)
       ArchiveFormat.APKS_TAR, ArchiveFormat.APKS_TAR_GZ, ArchiveFormat.APKS_TGZ ->
-        parseTarPackage(context, uri, inputFile, fileName, format)
-      else -> parseArchivePackage(context, uri, inputFile, fileName, format)
+        parseTarPackage(context, uri, inputFile, fileName, format, deleteInputIfExtracted)
+      else -> parseArchivePackage(context, uri, inputFile, fileName, format, deleteInputIfExtracted)
     }
   }
 
   /**
    * Multi-APK selection parser: combines multiple user-selected .apk files (e.g. base.apk + split_config.arm64.apk + split_config.ja.apk)
-   * into a unified split installation session!
+   * into a unified split installation session.
    */
   fun parseMultipleApkFiles(context: Context, files: List<File>): ApkArchiveInfo {
     val extractDir = File(context.cacheDir, "multi_apks_${System.currentTimeMillis()}")
     extractDir.mkdirs()
 
-    val copiedApks = mutableListOf<File>()
+    val extractedApks = mutableListOf<ExtractedApkItem>()
+    val extractedObbs = mutableListOf<ExtractedObbItem>()
+    var manifestJson: JSONObject? = null
+    var iconFromArchive: Bitmap? = null
+
     files.forEachIndexed { idx, file ->
-      if (file.name.lowercase().endsWith(".apk")) {
-        val target = File(extractDir, "${idx}_${file.name.replace("[^a-zA-Z0-9_.-]".toRegex(), "_")}")
+      val cleanOrig = file.name.replaceFirst("^\\d+_".toRegex(), "")
+      if (cleanOrig.lowercase().endsWith(".apk") && isDirectApkFile(file)) {
+        val safeName = cleanOrig.replace("[^a-zA-Z0-9_.-]".toRegex(), "_")
+        val target = File(extractDir, "${idx}_$safeName")
         file.copyTo(target, overwrite = true)
-        copiedApks.add(target)
+        extractedApks.add(ExtractedApkItem(target, cleanOrig, cleanOrig))
       } else {
-        // What if one of the selected files is a zip/apks/xapk? Extract its apks too!
-        extractZipApksAndObbs(file, extractDir, copiedApks, mutableListOf())
+        val (mJson, iconBmp) = extractZipApksAndObbs(file, extractDir, extractedApks, extractedObbs)
+        if (manifestJson == null && mJson != null) manifestJson = mJson
+        if (iconFromArchive == null && iconBmp != null) iconFromArchive = iconBmp
       }
     }
 
@@ -146,13 +168,24 @@ object PackageParser {
       context = context,
       uri = null,
       extractDir = extractDir,
-      fileName = "複数APKバンドル (${copiedApks.size}個)",
+      fileName = "複数APKバンドル (${extractedApks.size}個)",
       format = ArchiveFormat.MULTI_APK_DIR,
-      apkFiles = copiedApks,
-      obbFiles = emptyList(),
-      manifestJson = null,
-      totalBytes = copiedApks.sumOf { it.length() }
+      apkItems = extractedApks,
+      obbItems = extractedObbs,
+      manifestJson = manifestJson,
+      archiveIconBitmap = iconFromArchive,
+      totalBytes = extractedApks.sumOf { it.file.length() }
     )
+  }
+
+  private fun isDirectApkFile(file: File): Boolean {
+    return try {
+      ZipFile(file).use { zip ->
+        zip.getEntry("AndroidManifest.xml") != null
+      }
+    } catch (_: Exception) {
+      false
+    }
   }
 
   private fun parseSingleApk(
@@ -165,6 +198,7 @@ object PackageParser {
     val pm = context.packageManager
     val flags = PackageManager.GET_ACTIVITIES or PackageManager.GET_PERMISSIONS
     val pkgInfo: PackageInfo? = getArchiveInfoCompat(pm, file.absolutePath, flags)
+      ?: getArchiveInfoCompat(pm, file.absolutePath, 0)
 
     if (pkgInfo != null) {
       val appInfo = pkgInfo.applicationInfo ?: ApplicationInfo()
@@ -196,7 +230,7 @@ object PackageParser {
 
       val splits = listOf(
         SplitEntry(
-          name = file.name,
+          name = fileName,
           sizeBytes = file.length(),
           isBase = true,
           description = "メインアプリモジュール (Base APK)",
@@ -210,6 +244,7 @@ object PackageParser {
         fileName = fileName,
         format = format,
         packageName = pkgInfo.packageName,
+        originalPackageName = pkgInfo.packageName,
         appLabel = label,
         versionName = pkgInfo.versionName ?: "1.0",
         versionCode = vCode,
@@ -228,6 +263,7 @@ object PackageParser {
         fileName = fileName,
         format = format,
         packageName = "unknown.package",
+        originalPackageName = "unknown.package",
         appLabel = fileName.substringBeforeLast("."),
         versionName = "1.0",
         versionCode = 1L,
@@ -247,7 +283,8 @@ object PackageParser {
     context: Context,
     uri: Uri?,
     gzipFile: File,
-    fileName: String
+    fileName: String,
+    deleteInputIfExtracted: Boolean
   ): ApkArchiveInfo {
     val extractDir = File(context.cacheDir, "extracted_gz_${System.currentTimeMillis()}")
     extractDir.mkdirs()
@@ -265,10 +302,14 @@ object PackageParser {
       Log.e(TAG, "GZIP decompress error", e)
     }
 
-    if (outFile.name.endsWith(".tar", ignoreCase = true)) {
-      return parseTarPackage(context, uri, outFile, fileName, ArchiveFormat.APKS_TAR_GZ)
+    if (deleteInputIfExtracted && gzipFile.exists()) {
+      gzipFile.delete()
     }
-    val info = parsePackage(context, uri, outFile)
+
+    if (outFile.name.endsWith(".tar", ignoreCase = true)) {
+      return parseTarPackage(context, uri, outFile, fileName, ArchiveFormat.APKS_TAR_GZ, true)
+    }
+    val info = parsePackage(context, uri, outFile, false)
     return info.copy(fileName = fileName, format = ArchiveFormat.APKS_GZIP)
   }
 
@@ -277,14 +318,16 @@ object PackageParser {
     uri: Uri?,
     tarOrGzFile: File,
     fileName: String,
-    format: ArchiveFormat
+    format: ArchiveFormat,
+    deleteInputIfExtracted: Boolean
   ): ApkArchiveInfo {
     val extractDir = File(context.cacheDir, "extracted_tar_${System.currentTimeMillis()}")
     extractDir.mkdirs()
 
-    val apkFiles = mutableListOf<File>()
-    val obbFiles = mutableListOf<File>()
+    val apkItems = mutableListOf<ExtractedApkItem>()
+    val obbItems = mutableListOf<ExtractedObbItem>()
     var manifestJson: JSONObject? = null
+    val totalArchiveSize = tarOrGzFile.length()
 
     try {
       val rawStream: InputStream = FileInputStream(tarOrGzFile)
@@ -300,12 +343,16 @@ object PackageParser {
       }
 
       tarStream.use { input ->
-        extractTarStream(input, extractDir, apkFiles, obbFiles) { json ->
+        extractTarStream(input, extractDir, apkItems, obbItems) { json ->
           manifestJson = json
         }
       }
     } catch (e: Exception) {
       Log.e(TAG, "TAR extraction error", e)
+    }
+
+    if (deleteInputIfExtracted && tarOrGzFile.exists() && apkItems.isNotEmpty()) {
+      tarOrGzFile.delete()
     }
 
     return buildArchiveInfoFromExtractedFiles(
@@ -314,18 +361,19 @@ object PackageParser {
       extractDir = extractDir,
       fileName = fileName,
       format = format,
-      apkFiles = apkFiles,
-      obbFiles = obbFiles,
+      apkItems = apkItems,
+      obbItems = obbItems,
       manifestJson = manifestJson,
-      totalBytes = tarOrGzFile.length()
+      archiveIconBitmap = null,
+      totalBytes = totalArchiveSize
     )
   }
 
   private fun extractTarStream(
     input: InputStream,
     extractDir: File,
-    apkFiles: MutableList<File>,
-    obbFiles: MutableList<File>,
+    apkItems: MutableList<ExtractedApkItem>,
+    obbItems: MutableList<ExtractedObbItem>,
     onManifest: (JSONObject) -> Unit
   ) {
     val header = ByteArray(512)
@@ -338,42 +386,44 @@ object PackageParser {
         readTotal += r
       }
       if (readTotal < 512) break
-
-      // Check empty block (end of tar)
       if (header.all { it == 0.toByte() }) break
 
       val nameBytes = header.copyOfRange(0, 100)
       val nameLen = nameBytes.indexOfFirst { it == 0.toByte() }.let { if (it == -1) 100 else it }
       val entryName = String(nameBytes, 0, nameLen, Charsets.UTF_8).trim()
 
-      // Size in octal at offset 124, length 12
       val sizeStr = String(header, 124, 12, Charsets.US_ASCII)
         .trim { it <= ' ' || it == '\u0000' }
       val entrySize = sizeStr.toLongOrNull(8) ?: 0L
       val typeFlag = header[156].toInt().toChar()
 
       if (entrySize > 0 && (typeFlag == '0' || typeFlag == '\u0000')) {
-        val baseName = File(entryName).name.replace("[^a-zA-Z0-9_.-]".toRegex(), "_")
-        val uniqueName = "${index}_$baseName"
+        val rawFileName = File(entryName).name
+        val safeBaseName = rawFileName.replace("[^a-zA-Z0-9_.-]".toRegex(), "_")
+        val uniqueName = "split_${index}_$safeBaseName"
         index++
 
-        if (baseName.equals("manifest.json", ignoreCase = true) ||
-          baseName.equals("info.json", ignoreCase = true) ||
-          baseName.equals("omni_meta.json", ignoreCase = true)
+        if (rawFileName.equals("manifest.json", ignoreCase = true) ||
+          rawFileName.equals("info.json", ignoreCase = true) ||
+          rawFileName.equals("manifest_omni.json", ignoreCase = true)
         ) {
           val bytes = ByteArray(entrySize.toInt())
           readFully(input, bytes)
           try {
             onManifest(JSONObject(String(bytes, Charsets.UTF_8)))
           } catch (_: Exception) {}
-        } else if (baseName.endsWith(".apk", ignoreCase = true)) {
+        } else if (rawFileName.endsWith(".apk", ignoreCase = true)) {
           val outFile = File(extractDir, uniqueName)
           copyFixedBytes(input, outFile, entrySize)
-          apkFiles.add(outFile)
-        } else if (baseName.endsWith(".obb", ignoreCase = true)) {
-          val outFile = File(extractDir, baseName)
+          if (outFile.length() > 0) {
+            apkItems.add(ExtractedApkItem(outFile, rawFileName, entryName))
+          }
+        } else if (rawFileName.endsWith(".obb", ignoreCase = true)) {
+          val outFile = File(extractDir, safeBaseName)
           copyFixedBytes(input, outFile, entrySize)
-          obbFiles.add(outFile)
+          if (outFile.length() > 0) {
+            obbItems.add(ExtractedObbItem(outFile, rawFileName, entryName))
+          }
         } else {
           skipFully(input, entrySize)
         }
@@ -418,67 +468,140 @@ object PackageParser {
     }
   }
 
+  /**
+   * Extracts APKs, OBBs, manifest.json, and icon.png from XAPK / APKS / APKM / ZIP archives.
+   * Uses [ZipFile] (Central Directory) first for 100% compatibility with APKPure XAPK files,
+   * falling back to [ZipInputStream] only if needed.
+   */
   private fun extractZipApksAndObbs(
     zipFile: File,
     extractDir: File,
-    apkFiles: MutableList<File>,
-    obbFiles: MutableList<File>
-  ): JSONObject? {
+    apkItems: MutableList<ExtractedApkItem>,
+    obbItems: MutableList<ExtractedObbItem>
+  ): Pair<JSONObject?, Bitmap?> {
     var manifestJson: JSONObject? = null
-    var entryIndex = apkFiles.size
+    var archiveIcon: Bitmap? = null
+    var entryIndex = apkItems.size
+    var extractedWithZipFile = false
+
+    // 1. Primary path: ZipFile (reads Central Directory, handles data descriptors and large XAPKs cleanly)
     try {
-      zipFile.inputStream().buffered().use { fis ->
-        ZipInputStream(fis).use { zis ->
-          var entry: ZipEntry? = zis.nextEntry
-          while (entry != null) {
-            val entryName = entry.name
-            if (!entry.isDirectory) {
-              val cleanFileName = File(entryName).name.replace("[^a-zA-Z0-9_.-]".toRegex(), "_")
-              when {
-                cleanFileName.equals("manifest.json", ignoreCase = true) ||
-                  cleanFileName.equals("info.json", ignoreCase = true) ||
-                  cleanFileName.equals("omni_meta.json", ignoreCase = true) -> {
-                  val content = zis.readBytes().toString(Charsets.UTF_8)
-                  manifestJson = try { JSONObject(content) } catch (_: Exception) { manifestJson }
-                }
-                cleanFileName.endsWith(".apk", ignoreCase = true) -> {
-                  val uniqueName = "${entryIndex}_$cleanFileName"
-                  entryIndex++
-                  val outFile = File(extractDir, uniqueName)
-                  FileOutputStream(outFile).use { fos -> zis.copyTo(fos) }
-                  if (outFile.length() > 0) {
-                    apkFiles.add(outFile)
-                  }
-                }
-                cleanFileName.endsWith(".obb", ignoreCase = true) -> {
-                  val outFile = File(extractDir, cleanFileName)
-                  FileOutputStream(outFile).use { fos -> zis.copyTo(fos) }
-                  obbFiles.add(outFile)
-                }
-                cleanFileName.endsWith(".apks", ignoreCase = true) ||
-                  cleanFileName.endsWith(".xapk", ignoreCase = true) ||
-                  cleanFileName.endsWith(".zip", ignoreCase = true) -> {
-                  // Nested bundle inside a zip!
-                  val nestedZip = File(extractDir, "nested_${entryIndex}_$cleanFileName")
-                  entryIndex++
-                  FileOutputStream(nestedZip).use { fos -> zis.copyTo(fos) }
-                  val nestedManifest = extractZipApksAndObbs(nestedZip, extractDir, apkFiles, obbFiles)
-                  if (manifestJson == null && nestedManifest != null) {
-                    manifestJson = nestedManifest
-                  }
-                  nestedZip.delete()
-                }
+      ZipFile(zipFile).use { zip ->
+        val entries = zip.entries()
+        while (entries.hasMoreElements()) {
+          val entry = entries.nextElement()
+          if (entry.isDirectory) continue
+          val entryPath = entry.name.replace("\\", "/")
+          val rawFileName = entryPath.substringAfterLast("/")
+          val safeFileName = rawFileName.replace("[^a-zA-Z0-9_.-]".toRegex(), "_")
+
+          when {
+            rawFileName.equals("manifest.json", ignoreCase = true) ||
+              rawFileName.equals("info.json", ignoreCase = true) ||
+              rawFileName.equals("manifest_omni.json", ignoreCase = true) -> {
+              zip.getInputStream(entry).use { ins ->
+                val content = ins.readBytes().toString(Charsets.UTF_8)
+                manifestJson = try { JSONObject(content) } catch (_: Exception) { manifestJson }
               }
             }
-            zis.closeEntry()
-            entry = zis.nextEntry
+            (rawFileName.equals("icon.png", ignoreCase = true) || rawFileName.equals("icon.webp", ignoreCase = true)) && archiveIcon == null -> {
+              zip.getInputStream(entry).use { ins ->
+                archiveIcon = try { BitmapFactory.decodeStream(ins) } catch (_: Exception) { null }
+              }
+            }
+            rawFileName.endsWith(".apk", ignoreCase = true) -> {
+              val uniqueName = "apk_${entryIndex}_$safeFileName"
+              entryIndex++
+              val outFile = File(extractDir, uniqueName)
+              zip.getInputStream(entry).use { ins ->
+                FileOutputStream(outFile).use { fos -> ins.copyTo(fos, 65536) }
+              }
+              if (outFile.length() > 0) {
+                apkItems.add(ExtractedApkItem(outFile, rawFileName, entryPath))
+              }
+            }
+            rawFileName.endsWith(".obb", ignoreCase = true) -> {
+              val outFile = File(extractDir, safeFileName)
+              zip.getInputStream(entry).use { ins ->
+                FileOutputStream(outFile).use { fos -> ins.copyTo(fos, 65536) }
+              }
+              if (outFile.length() > 0) {
+                obbItems.add(ExtractedObbItem(outFile, rawFileName, entryPath))
+              }
+            }
+            rawFileName.endsWith(".apks", ignoreCase = true) ||
+              rawFileName.endsWith(".xapk", ignoreCase = true) ||
+              rawFileName.endsWith(".apkm", ignoreCase = true) ||
+              rawFileName.endsWith(".zip", ignoreCase = true) -> {
+              val nestedZip = File(extractDir, "nested_${entryIndex}_$safeFileName")
+              entryIndex++
+              zip.getInputStream(entry).use { ins ->
+                FileOutputStream(nestedZip).use { fos -> ins.copyTo(fos, 65536) }
+              }
+              val (nestedManifest, nestedIcon) = extractZipApksAndObbs(nestedZip, extractDir, apkItems, obbItems)
+              if (manifestJson == null && nestedManifest != null) manifestJson = nestedManifest
+              if (archiveIcon == null && nestedIcon != null) archiveIcon = nestedIcon
+              nestedZip.delete()
+            }
           }
         }
+        extractedWithZipFile = true
       }
     } catch (e: Exception) {
-      Log.e(TAG, "extractZipApksAndObbs error", e)
+      Log.w(TAG, "ZipFile extraction fallback to ZipInputStream: ${e.message}")
     }
-    return manifestJson
+
+    // 2. Fallback path: ZipInputStream if ZipFile failed or extracted 0 APKs
+    if (!extractedWithZipFile || (apkItems.isEmpty() && obbItems.isEmpty())) {
+      try {
+        zipFile.inputStream().buffered().use { fis ->
+          ZipInputStream(fis).use { zis ->
+            var entry: ZipEntry? = zis.nextEntry
+            while (entry != null) {
+              if (!entry.isDirectory) {
+                val entryPath = entry.name.replace("\\", "/")
+                val rawFileName = entryPath.substringAfterLast("/")
+                val safeFileName = rawFileName.replace("[^a-zA-Z0-9_.-]".toRegex(), "_")
+                when {
+                  rawFileName.equals("manifest.json", ignoreCase = true) ||
+                    rawFileName.equals("info.json", ignoreCase = true) ||
+                    rawFileName.equals("manifest_omni.json", ignoreCase = true) -> {
+                    val content = zis.readBytes().toString(Charsets.UTF_8)
+                    manifestJson = try { JSONObject(content) } catch (_: Exception) { manifestJson }
+                  }
+                  rawFileName.equals("icon.png", ignoreCase = true) && archiveIcon == null -> {
+                    val bytes = zis.readBytes()
+                    archiveIcon = try { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) } catch (_: Exception) { null }
+                  }
+                  rawFileName.endsWith(".apk", ignoreCase = true) -> {
+                    val uniqueName = "apk_${entryIndex}_$safeFileName"
+                    entryIndex++
+                    val outFile = File(extractDir, uniqueName)
+                    FileOutputStream(outFile).use { fos -> zis.copyTo(fos, 65536) }
+                    if (outFile.length() > 0) {
+                      apkItems.add(ExtractedApkItem(outFile, rawFileName, entryPath))
+                    }
+                  }
+                  rawFileName.endsWith(".obb", ignoreCase = true) -> {
+                    val outFile = File(extractDir, safeFileName)
+                    FileOutputStream(outFile).use { fos -> zis.copyTo(fos, 65536) }
+                    if (outFile.length() > 0) {
+                      obbItems.add(ExtractedObbItem(outFile, rawFileName, entryPath))
+                    }
+                  }
+                }
+              }
+              zis.closeEntry()
+              entry = zis.nextEntry
+            }
+          }
+        }
+      } catch (e: Exception) {
+        Log.e(TAG, "ZipInputStream fallback error", e)
+      }
+    }
+
+    return Pair(manifestJson, archiveIcon)
   }
 
   private fun parseArchivePackage(
@@ -486,22 +609,27 @@ object PackageParser {
     uri: Uri?,
     archiveFile: File,
     fileName: String,
-    format: ArchiveFormat
+    format: ArchiveFormat,
+    deleteInputIfExtracted: Boolean
   ): ApkArchiveInfo {
     val extractDir = File(context.cacheDir, "extracted_${System.currentTimeMillis()}")
     extractDir.mkdirs()
 
-    val apkFiles = mutableListOf<File>()
-    val obbFiles = mutableListOf<File>()
-    val manifestJson = extractZipApksAndObbs(archiveFile, extractDir, apkFiles, obbFiles)
+    val apkItems = mutableListOf<ExtractedApkItem>()
+    val obbItems = mutableListOf<ExtractedObbItem>()
+    val totalArchiveSize = archiveFile.length()
+    val (manifestJson, archiveIcon) = extractZipApksAndObbs(archiveFile, extractDir, apkItems, obbItems)
 
-    // If no inner .apk files were found, maybe the file itself is an APK renamed to .zip / .omni / .bin
-    if (apkFiles.isEmpty()) {
+    // If no inner .apk files were found, maybe the file itself is a single APK with a non-.apk extension
+    if (apkItems.isEmpty()) {
       val pm = context.packageManager
       val directInfo = getArchiveInfoCompat(pm, archiveFile.absolutePath, 0)
       if (directInfo != null) {
         return parseSingleApk(context, uri, archiveFile, fileName, format)
       }
+    } else if (deleteInputIfExtracted && archiveFile.exists()) {
+      // Free up temporary archive copy once all inner APKs and OBBs are extracted
+      archiveFile.delete()
     }
 
     return buildArchiveInfoFromExtractedFiles(
@@ -510,11 +638,32 @@ object PackageParser {
       extractDir = extractDir,
       fileName = fileName,
       format = format,
-      apkFiles = apkFiles,
-      obbFiles = obbFiles,
+      apkItems = apkItems,
+      obbItems = obbItems,
       manifestJson = manifestJson,
-      totalBytes = archiveFile.length()
+      archiveIconBitmap = archiveIcon,
+      totalBytes = totalArchiveSize
     )
+  }
+
+  private fun detectAbiFromSplitName(rawFileName: String): String? {
+    val lower = rawFileName.lowercase()
+    return when {
+      lower.contains("arm64_v8a") || lower.contains("arm64-v8a") || lower.contains("arm64") -> "arm64-v8a"
+      lower.contains("armeabi_v7a") || lower.contains("armeabi-v7a") || lower.contains("armv7") -> "armeabi-v7a"
+      lower.contains("armeabi") -> "armeabi"
+      lower.contains("x86_64") || lower.contains("x86-64") -> "x86_64"
+      lower.contains("x86") -> "x86"
+      else -> null
+    }
+  }
+
+  private fun isLikelyConfigSplitName(rawFileName: String): Boolean {
+    val lower = rawFileName.lowercase()
+    return lower.startsWith("config.") ||
+      lower.startsWith("split_config.") ||
+      lower.startsWith("split_") ||
+      lower.contains(".config.")
   }
 
   private fun buildArchiveInfoFromExtractedFiles(
@@ -523,71 +672,15 @@ object PackageParser {
     extractDir: File,
     fileName: String,
     format: ArchiveFormat,
-    apkFiles: List<File>,
-    obbFiles: List<File>,
+    apkItems: List<ExtractedApkItem>,
+    obbItems: List<ExtractedObbItem>,
     manifestJson: JSONObject?,
+    archiveIconBitmap: Bitmap?,
     totalBytes: Long
   ): ApkArchiveInfo {
     val pm = context.packageManager
 
-    // Accurately detect the Base APK vs Config Split APKs:
-    // Base APK has NO splitName (or its name is base.apk / main package apk) and has applicationInfo label/icon
-    var baseApkFile: File? = null
-    val parsedApkMeta = mutableMapOf<File, PackageInfo?>()
-
-    for (apk in apkFiles) {
-      val pi = getArchiveInfoCompat(pm, apk.absolutePath, PackageManager.GET_ACTIVITIES)
-      parsedApkMeta[apk] = pi
-    }
-
-    // 1. Look for an APK where PackageInfo is non-null AND splitNames/split status indicates base
-    baseApkFile = apkFiles.find { apk ->
-      val clean = apk.name.substringAfter("_").lowercase()
-      clean == "base.apk" || clean == "base-master.apk" || clean == "main.apk"
-    }
-
-    if (baseApkFile == null) {
-      // Find APK that is NOT a config split
-      baseApkFile = apkFiles.filter { apk ->
-        val clean = apk.name.substringAfter("_").lowercase()
-        !clean.startsWith("split_") && !clean.startsWith("config.")
-      }.maxByOrNull { it.length() }
-    }
-
-    if (baseApkFile == null && apkFiles.isNotEmpty()) {
-      baseApkFile = apkFiles.maxByOrNull { it.length() }
-    }
-
-    // Filter out incompatible ABI splits if multiple conflicting ABIs exist in an unpruned bundle
-    val supportedAbis = Build.SUPPORTED_ABIS.map { it.lowercase() }
-    val allKnownAbiTags = listOf(
-      "arm64_v8a" to "arm64-v8a",
-      "arm64-v8a" to "arm64-v8a",
-      "armeabi_v7a" to "armeabi-v7a",
-      "armeabi-v7a" to "armeabi-v7a",
-      "x86_64" to "x86_64",
-      "x86" to "x86"
-    )
-
-    val filteredApks = apkFiles.filter { apk ->
-      if (apk == baseApkFile) return@filter true
-      val lowerName = apk.name.lowercase()
-      var matchedAbi: String? = null
-      for ((tag, canonicalAbi) in allKnownAbiTags) {
-        if (lowerName.contains(tag)) {
-          // Avoid matching "x86" when it's actually "x86_64"
-          if (tag == "x86" && lowerName.contains("x86_64")) continue
-          matchedAbi = canonicalAbi
-          break
-        }
-      }
-      if (matchedAbi != null) {
-        supportedAbis.contains(matchedAbi)
-      } else {
-        true
-      }
-    }.ifEmpty { apkFiles }
-
+    // Parse manifest.json metadata first (XAPK / APKM / Backup manifest)
     var pkgName = manifestJson?.optString("package_name")
       ?.ifBlank { manifestJson.optString("pname") }
       ?.ifBlank { manifestJson.optString("packageName") }
@@ -595,43 +688,124 @@ object PackageParser {
     var versionName = manifestJson?.optString("version_name")
       ?.ifBlank { manifestJson.optString("versionName") }
       ?: ""
-    var versionCode = manifestJson?.optLong("version_code", 0L)
-      ?.takeIf { it > 0L }
+    val versionCodeStr = manifestJson?.optString("version_code", "")
+      ?.ifBlank { manifestJson.optString("versionCode", "") }
+      ?: ""
+    var versionCode = versionCodeStr.toLongOrNull()
+      ?: manifestJson?.optLong("version_code", 0L)?.takeIf { it > 0L }
       ?: manifestJson?.optLong("versionCode", 1L)
       ?: 1L
-    var minSdk = manifestJson?.optInt("min_sdk_version", 21) ?: 21
-    var targetSdk = manifestJson?.optInt("target_sdk_version", 34) ?: 34
+    var minSdk = manifestJson?.optString("min_sdk_version", "")?.toIntOrNull()
+      ?: manifestJson?.optInt("min_sdk_version", 21)
+      ?: 21
+    var targetSdk = manifestJson?.optString("target_sdk_version", "")?.toIntOrNull()
+      ?: manifestJson?.optInt("target_sdk_version", 34)
+      ?: 34
     var label = manifestJson?.optString("name")
       ?.ifBlank { manifestJson.optString("app_name") }
       ?.ifBlank { manifestJson.optString("appLabel") }
       ?: ""
-    var iconBitmap: Bitmap? = null
 
-    if (baseApkFile != null) {
-      val pi = parsedApkMeta[baseApkFile] ?: getArchiveInfoCompat(pm, baseApkFile.absolutePath, PackageManager.GET_ACTIVITIES)
+    // Check if manifest.json explicitly declares `split_apks` with `"id": "base"` (XAPK v2 standard)
+    var manifestBaseFileName: String? = null
+    val splitApksArr = manifestJson?.optJSONArray("split_apks")
+    if (splitApksArr != null) {
+      for (i in 0 until splitApksArr.length()) {
+        val obj = splitApksArr.optJSONObject(i) ?: continue
+        val id = obj.optString("id", "")
+        val fileRef = obj.optString("file", "")
+        if (id.equals("base", ignoreCase = true) && fileRef.isNotBlank()) {
+          manifestBaseFileName = fileRef.substringAfterLast("/")
+          break
+        }
+      }
+    }
+
+    // Query Android PackageManager on all extracted APKs
+    // Note: Pure config split APKs (config.arm64_v8a.apk, config.xxhdpi.apk, etc.) do NOT have an <application> tag,
+    // so getPackageArchiveInfo returns non-null with valid applicationInfo ONLY for Base APKs (or feature splits).
+    val parsedApkMeta = mutableMapOf<File, PackageInfo?>()
+    for (item in apkItems) {
+      val pi = getArchiveInfoCompat(pm, item.file.absolutePath, 0)
+      parsedApkMeta[item.file] = pi
+    }
+
+    // 1. Identify Base APK using 4-tier priority
+    var baseItem: ExtractedApkItem? = null
+
+    // Priority 1: Explicit `"id": "base"` in XAPK `manifest.json`
+    if (manifestBaseFileName != null) {
+      baseItem = apkItems.find {
+        it.originalFileName.equals(manifestBaseFileName, ignoreCase = true) ||
+          it.zipEntryPath.equals(manifestBaseFileName, ignoreCase = true)
+      }
+    }
+
+    // Priority 2: Standard base APK naming (`base.apk`, `base-master.apk`, `<package_name>.apk`)
+    if (baseItem == null) {
+      baseItem = apkItems.find { item ->
+        val lower = item.originalFileName.lowercase()
+        lower == "base.apk" ||
+          lower == "base-master.apk" ||
+          lower == "main.apk" ||
+          (pkgName.isNotBlank() && lower == "${pkgName.lowercase()}.apk")
+      }
+    }
+
+    // Priority 3: APK with valid PackageInfo + ApplicationInfo that is NOT a config split
+    if (baseItem == null) {
+      baseItem = apkItems.filter { item ->
+        parsedApkMeta[item.file] != null && !isLikelyConfigSplitName(item.originalFileName)
+      }.maxByOrNull { it.file.length() }
+    }
+
+    // Priority 4: Any APK that is not a config split, or largest APK
+    if (baseItem == null) {
+      baseItem = apkItems.filter { !isLikelyConfigSplitName(it.originalFileName) }
+        .maxByOrNull { it.file.length() }
+        ?: apkItems.maxByOrNull { it.file.length() }
+    }
+
+    // Extract accurate package metadata from the Base APK
+    var iconBitmap: Bitmap? = archiveIconBitmap
+    if (baseItem != null) {
+      val pi = parsedApkMeta[baseItem.file]
+        ?: getArchiveInfoCompat(pm, baseItem.file.absolutePath, PackageManager.GET_ACTIVITIES)
       if (pi != null) {
         val appInfo = pi.applicationInfo ?: ApplicationInfo()
-        appInfo.sourceDir = baseApkFile.absolutePath
-        appInfo.publicSourceDir = baseApkFile.absolutePath
+        appInfo.sourceDir = baseItem.file.absolutePath
+        appInfo.publicSourceDir = baseItem.file.absolutePath
 
-        if (pkgName.isBlank()) pkgName = pi.packageName
-        if (versionName.isBlank()) versionName = pi.versionName ?: "1.0"
-        if (versionCode <= 1L) {
-          versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            pi.longVersionCode
-          } else {
-            @Suppress("DEPRECATION")
-            pi.versionCode.toLong()
-          }
+        // Always trust Base APK's internal packageName for PackageInstaller compatibility!
+        if (pi.packageName.isNotBlank()) {
+          pkgName = pi.packageName
         }
-        if (label.isBlank()) {
-          label = try { appInfo.loadLabel(pm).toString() } catch (_: Exception) { "" }
+        if (versionName.isBlank() || !pi.versionName.isNullOrBlank()) {
+          versionName = pi.versionName ?: versionName.ifBlank { "1.0" }
         }
-        iconBitmap = try { drawableToBitmap(appInfo.loadIcon(pm)) } catch (_: Exception) { null }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && minSdk == 21) {
+        val piVersionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+          pi.longVersionCode
+        } else {
+          @Suppress("DEPRECATION")
+          pi.versionCode.toLong()
+        }
+        if (piVersionCode > 0L) {
+          versionCode = piVersionCode
+        }
+        val loadedLabel = try { appInfo.loadLabel(pm).toString() } catch (_: Exception) { "" }
+        if (loadedLabel.isNotBlank() && !loadedLabel.startsWith("com.")) {
+          label = loadedLabel
+        }
+        val loadedIcon = try { drawableToBitmap(appInfo.loadIcon(pm)) } catch (_: Exception) { null }
+        if (loadedIcon != null) {
+          iconBitmap = loadedIcon
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && appInfo.minSdkVersion > 0) {
           minSdk = appInfo.minSdkVersion
         }
-        if (targetSdk == 34) targetSdk = appInfo.targetSdkVersion
+        if (appInfo.targetSdkVersion > 0) {
+          targetSdk = appInfo.targetSdkVersion
+        }
       }
     }
 
@@ -639,40 +813,91 @@ object PackageParser {
     if (label.isBlank()) label = fileName.substringBeforeLast(".")
     if (versionName.isBlank()) versionName = "1.0"
 
-    // Ensure Base APK is always first in the list of splits!
-    val sortedApks = filteredApks.sortedByDescending { it == baseApkFile }
+    // 2. Single-Best-ABI Selection for Split APKs:
+    // Android PackageInstaller rejects sessions containing multiple conflicting ABI splits
+    // (e.g. both config.arm64_v8a.apk and config.armeabi_v7a.apk).
+    // Select ONLY the highest-priority ABI from Build.SUPPORTED_ABIS present in the archive!
+    val deviceSupportedAbis = Build.SUPPORTED_ABIS.map { it.lowercase() }
+    val splitAbisInArchive = apkItems
+      .filter { it != baseItem }
+      .mapNotNull { detectAbiFromSplitName(it.originalFileName) }
+      .toSet()
 
-    val splitEntries = sortedApks.map { apk ->
-      val isBase = apk == baseApkFile
-      val cleanDisplayName = apk.name.substringAfter("_")
+    val bestMatchingAbi: String? = deviceSupportedAbis.firstOrNull { abi ->
+      splitAbisInArchive.contains(abi)
+    }
+
+    val filteredApkItems = apkItems.filter { item ->
+      if (item == baseItem) return@filter true
+      val itemAbi = detectAbiFromSplitName(item.originalFileName)
+      if (itemAbi != null) {
+        // Keep only the single best matching ABI for this device
+        if (bestMatchingAbi != null) {
+          itemAbi == bestMatchingAbi
+        } else {
+          deviceSupportedAbis.contains(itemAbi)
+        }
+      } else {
+        // Non-ABI split (DPI, language, feature module) -> keep all
+        true
+      }
+    }.ifEmpty { apkItems }
+
+    // Ensure Base APK is always first
+    val sortedApkItems = filteredApkItems.sortedByDescending { it == baseItem }
+
+    val splitEntries = sortedApkItems.map { item ->
+      val isBase = item == baseItem
+      val cleanDisplayName = item.originalFileName
+      val detectedAbi = detectAbiFromSplitName(cleanDisplayName)
       val desc = when {
         isBase -> "ベースモジュール (Base APK)"
-        cleanDisplayName.contains("arm64") || cleanDisplayName.contains("v8a") -> "ABI ネイティブライブラリ (arm64-v8a)"
-        cleanDisplayName.contains("armeabi") || cleanDisplayName.contains("v7a") -> "ABI ネイティブライブラリ (armeabi-v7a)"
-        cleanDisplayName.contains("x86_64") -> "ABI ネイティブライブラリ (x86_64)"
-        cleanDisplayName.contains("x86") -> "ABI ネイティブライブラリ (x86)"
-        cleanDisplayName.contains("dpi") -> "画面密度リソース (${cleanDisplayName})"
-        cleanDisplayName.contains("ja") || cleanDisplayName.contains("en") -> "言語ローカライズ (${cleanDisplayName})"
+        detectedAbi != null -> "ABI ネイティブライブラリ ($detectedAbi)"
+        cleanDisplayName.lowercase().contains("dpi") -> "画面密度リソース ($cleanDisplayName)"
+        cleanDisplayName.lowercase().startsWith("config.") -> "構成スプリット ($cleanDisplayName)"
         else -> "スプリットモジュール ($cleanDisplayName)"
       }
       SplitEntry(
-        name = apk.name,
-        sizeBytes = apk.length(),
+        name = cleanDisplayName,
+        sizeBytes = item.file.length(),
         isBase = isBase,
         description = desc,
-        filePath = apk.absolutePath
+        filePath = item.file.absolutePath
       )
     }
 
-    val obbEntries = obbFiles.map { obb ->
+    // Parse OBB expansion paths from manifest.json if available
+    val expansionPathMap = mutableMapOf<String, String>()
+    val expansionsArr = manifestJson?.optJSONArray("expansions")
+    if (expansionsArr != null) {
+      for (i in 0 until expansionsArr.length()) {
+        val obj = expansionsArr.optJSONObject(i) ?: continue
+        val fileRef = obj.optString("file", "").substringAfterLast("/")
+        val installPath = obj.optString("install_path", "")
+        if (fileRef.isNotBlank() && installPath.isNotBlank()) {
+          expansionPathMap[fileRef] = installPath
+        }
+      }
+    }
+
+    val obbEntries = obbItems.map { obb ->
+      val relPath = expansionPathMap[obb.originalFileName]
+        ?: if (obb.zipEntryPath.contains("Android/obb/", ignoreCase = true)) {
+          obb.zipEntryPath.substringAfter("Android/obb/", "Android/obb/$pkgName/${obb.originalFileName}").let {
+            "Android/obb/$it"
+          }
+        } else {
+          "Android/obb/$pkgName/${obb.originalFileName}"
+        }
       ObbEntry(
-        fileName = obb.name,
-        relativePath = "Android/obb/$pkgName/${obb.name}",
-        sizeBytes = obb.length()
+        fileName = obb.file.name,
+        relativePath = relPath,
+        sizeBytes = obb.file.length()
       )
     }
 
-    val sumSplitBytes = sortedApks.sumOf { it.length() } + obbFiles.sumOf { it.length() }
+    val sumSplitBytes = sortedApkItems.sumOf { it.file.length() } + obbItems.sumOf { it.file.length() }
+    val isAbiCompatible = splitAbisInArchive.isEmpty() || bestMatchingAbi != null
 
     return ApkArchiveInfo(
       uri = uri,
@@ -680,6 +905,7 @@ object PackageParser {
       fileName = fileName,
       format = format,
       packageName = pkgName,
+      originalPackageName = pkgName,
       appLabel = label,
       versionName = versionName,
       versionCode = versionCode,
@@ -689,7 +915,7 @@ object PackageParser {
       totalSizeBytes = if (sumSplitBytes > 0) sumSplitBytes else totalBytes,
       splits = splitEntries,
       obbEntries = obbEntries,
-      isCompatible = minSdk <= Build.VERSION.SDK_INT
+      isCompatible = (minSdk <= Build.VERSION.SDK_INT) && isAbiCompatible
     )
   }
 
@@ -729,7 +955,7 @@ object PackageParser {
     if (tempFile.exists()) tempFile.delete()
     context.contentResolver.openInputStream(uri)?.use { input ->
       FileOutputStream(tempFile).use { output ->
-        input.copyTo(output)
+        input.copyTo(output, 65536)
       }
     }
     return tempFile

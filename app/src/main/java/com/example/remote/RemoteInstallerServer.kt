@@ -1,16 +1,24 @@
 package com.example.remote
 
+import android.app.ActivityManager
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Environment
+import android.os.StatFs
 import android.text.format.Formatter
 import android.util.Log
 import com.example.backup.BackupManager
+import com.example.installer.PackageInstallerManager
+import com.example.installer.PackageParser
 import com.example.installer.RootHelper
 import com.example.model.AppMetadataOverride
 import com.example.model.BackupExportFormat
 import com.example.model.RemoteServerStatus
+import com.example.model.StoreAppItem
 import com.example.optimizer.AppsManagerRepository
+import com.example.store.StoreRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,12 +46,18 @@ import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URLDecoder
+import java.util.concurrent.ConcurrentHashMap
 
 class RemoteInstallerServer(
   private val context: Context,
   private val onPackageReceived: (File) -> Unit,
   private val onDirectUrlReceived: ((String) -> Unit)? = null,
-  private val onRemoteStateChanged: (() -> Unit)? = null
+  private val onRemoteStateChanged: (() -> Unit)? = null,
+  private val onPackageReceivedAdvanced: ((File, AppMetadataOverride?, Boolean) -> Unit)? = null,
+  private val onMultiplePackagesReceived: ((List<File>, Boolean) -> Unit)? = null,
+  private val getStoreAppsProvider: (() -> List<StoreAppItem>)? = null,
+  private val onBatchImportStoreSources: ((String) -> Unit)? = null,
+  private val onInstallStoreApp: ((StoreAppItem) -> Unit)? = null
 ) {
 
   companion object {
@@ -63,6 +77,8 @@ class RemoteInstallerServer(
   private var cfTunnelJob: Job? = null
   private val serverScope = CoroutineScope(Dispatchers.IO)
 
+  private val multiApkBatches = ConcurrentHashMap<String, MutableList<File>>()
+
   init {
     if (_status.value.autoStartOnLaunch) {
       start(_status.value.port)
@@ -72,8 +88,8 @@ class RemoteInstallerServer(
   private fun loadInitialStatus(): RemoteServerStatus {
     val savedPort = prefs.getInt("port", DEFAULT_PORT).coerceIn(1024, 65535)
     val autoStart = prefs.getBoolean("autoStartOnLaunch", false)
-    val allowAppMgmt = prefs.getBoolean("allowRemoteAppManagement", false)
-    val allowPermEdit = prefs.getBoolean("allowRemotePermissionEdit", false)
+    val allowAppMgmt = prefs.getBoolean("allowRemoteAppManagement", true)
+    val allowPermEdit = prefs.getBoolean("allowRemotePermissionEdit", true)
     val allowUrlInstall = prefs.getBoolean("allowRemoteUrlInstall", true)
     val cfToken = prefs.getString("cfTunnelToken", "") ?: ""
     val cfHost = prefs.getString("cfCustomHost", "") ?: ""
@@ -147,7 +163,7 @@ class RemoteInstallerServer(
 
     val validPort = port.coerceIn(1024, 65535)
     val allIps = getAllLocalIpAddresses()
-    val primaryIp = allIps.firstOrNull() ?: "127.0.0.1"
+    val primaryIp = allIps.firstOrNull()?.substringBefore(" ") ?: "127.0.0.1"
 
     serverJob = serverScope.launch {
       try {
@@ -264,7 +280,7 @@ class RemoteInstallerServer(
           }
         }
       } catch (e: Exception) {
-        addLog("端末内cloudflaredバイナリ未検出のため、PC/Termux連携コマンドモードで待機中 (Port $port)")
+        addLog("端末内cloudflared未検出のため、PC/Termux連携コマンドモードで待機中 (Port $port)")
         _status.value = _status.value.copy(
           cfTunnelRunning = false,
           cfPublicUrl = ""
@@ -289,14 +305,14 @@ class RemoteInstallerServer(
   }
 
   fun addLog(message: String) {
-    val updated = (_status.value.logs + message).takeLast(40)
+    val updated = (_status.value.logs + message).takeLast(50)
     _status.value = _status.value.copy(logs = updated)
   }
 
   private fun handleClient(socket: Socket) {
     socket.use { s ->
       try {
-        s.soTimeout = 60_000
+        s.soTimeout = 120_000
         val input = BufferedInputStream(s.getInputStream())
         val output = BufferedOutputStream(s.getOutputStream())
 
@@ -325,13 +341,24 @@ class RemoteInstallerServer(
           method == "GET" && (path == "/" || path.startsWith("/index")) -> serveHtml(output)
           method == "GET" && path == "/status" -> serveStatus(output)
           method == "POST" && path == "/upload" -> handleUpload(headers, input, output)
+          method == "POST" && path == "/api/upload-bundle" -> handleUploadBundle(query, headers, input, output)
           method == "POST" && path == "/install-url" -> handleRemoteUrlInstall(headers, input, output)
+          method == "POST" && path == "/api/session/install" -> handleTriggerSessionInstall(output)
           method == "GET" && path == "/api/apps" -> handleListApps(output)
+          method == "GET" && path == "/api/apps/icon" -> handleAppIcon(query, output)
           method == "POST" && path == "/api/apps/launch" -> handleLaunchApp(headers, input, output)
           method == "POST" && path == "/api/apps/uninstall" -> handleUninstallApp(headers, input, output)
           method == "GET" && path == "/api/apps/export" -> handleExportApp(query, output)
           method == "POST" && path == "/api/apps/metadata" -> handleUpdateMetadata(headers, input, output)
           method == "POST" && path == "/api/apps/permission" -> handleTogglePermission(headers, input, output)
+          method == "GET" && path == "/api/backups" -> handleListBackups(output)
+          method == "POST" && path == "/api/backups/create" -> handleCreateBackup(headers, input, output)
+          method == "GET" && path == "/api/backups/download" -> handleDownloadBackup(query, output)
+          method == "POST" && path == "/api/backups/restore" -> handleRestoreBackup(headers, input, output)
+          method == "POST" && path == "/api/backups/delete" -> handleDeleteBackup(headers, input, output)
+          method == "GET" && path == "/api/store" -> handleListStore(output)
+          method == "POST" && path == "/api/store/add-repos" -> handleAddStoreRepos(headers, input, output)
+          method == "POST" && path == "/api/store/install" -> handleInstallStoreApp(headers, input, output)
           method == "POST" && path == "/api/system/clean-cache" -> handleCleanCache(output)
           else -> sendResponse(output, 404, "text/plain; charset=UTF-8", "Not Found".toByteArray(Charsets.UTF_8))
         }
@@ -341,8 +368,22 @@ class RemoteInstallerServer(
     }
   }
 
+  private fun parseQueryParams(query: String): Map<String, String> {
+    if (query.isBlank()) return emptyMap()
+    val map = mutableMapOf<String, String>()
+    query.split("&").forEach { pair ->
+      val kv = pair.split("=", limit = 2)
+      if (kv.size == 2) {
+        val k = runCatching { URLDecoder.decode(kv[0], "UTF-8") }.getOrDefault(kv[0])
+        val v = runCatching { URLDecoder.decode(kv[1], "UTF-8") }.getOrDefault(kv[1])
+        map[k] = v
+      }
+    }
+    return map
+  }
+
   private fun readJsonBody(headers: Map<String, String>, input: InputStream): JSONObject {
-    val contentLength = headers["content-length"]?.toIntOrNull()?.coerceIn(0, 262144) ?: 0
+    val contentLength = headers["content-length"]?.toIntOrNull()?.coerceIn(0, 524288) ?: 0
     if (contentLength <= 0) return JSONObject()
     val buf = ByteArray(contentLength)
     var read = 0
@@ -358,14 +399,82 @@ class RemoteInstallerServer(
     }
   }
 
+  private fun serveHtml(output: OutputStream) {
+    val deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}"
+    val osVer = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
+    val abis = Build.SUPPORTED_ABIS.joinToString(", ")
+    val html = RemoteWebConsoleHtml.buildHtml(deviceModel, osVer, abis, _status.value)
+    sendResponse(output, 200, "text/html; charset=UTF-8", html.toByteArray(Charsets.UTF_8))
+  }
+
+  private fun serveStatus(output: OutputStream) {
+    val st = _status.value
+    val session = PackageInstallerManager.sessionState.value
+
+    // Storage telemetry
+    val statFs = StatFs(Environment.getDataDirectory().path)
+    val totalBytes = statFs.totalBytes
+    val freeBytes = statFs.availableBytes
+    val usedBytes = (totalBytes - freeBytes).coerceAtLeast(0L)
+    val totalGB = String.format("%.1f", totalBytes / 1073741824.0)
+    val freeGB = String.format("%.1f", freeBytes / 1073741824.0)
+    val storageUsedPct = if (totalBytes > 0) ((usedBytes * 100) / totalBytes).toInt() else 30
+
+    // Memory telemetry
+    val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+    val memInfo = ActivityManager.MemoryInfo()
+    am?.getMemoryInfo(memInfo)
+    val totalRamMB = (memInfo.totalMem / 1048576L).coerceAtLeast(1L)
+    val availRamMB = (memInfo.availMem / 1048576L).coerceAtLeast(0L)
+    val usedRamMB = (totalRamMB - availRamMB).coerceAtLeast(0L)
+    val ramUsedPct = ((usedRamMB * 100) / totalRamMB).toInt()
+
+    val isRoot = runBlocking { RootHelper.isRootAvailable() }
+
+    val json = JSONObject().apply {
+      put("running", st.isRunning)
+      put("port", st.port)
+      put("uploads", st.uploadedFilesCount)
+      put("allowRemoteAppManagement", st.allowRemoteAppManagement)
+      put("allowRemotePermissionEdit", st.allowRemotePermissionEdit)
+      put("allowRemoteUrlInstall", st.allowRemoteUrlInstall)
+      put("storageText", "$freeGB GB Free / $totalGB GB")
+      put("storageUsedPct", storageUsedPct)
+      put("ramText", "$usedRamMB / $totalRamMB MB")
+      put("ramUsedPct", ramUsedPct)
+      put("privilegeText", if (isRoot) "Root Privileged" else "Standard PackageInstaller")
+      put("sessionStatus", session.status.name)
+      put("sessionTask", session.currentTask)
+      put("sessionProgress", session.progress)
+      put("parsedPackageName", session.packageName)
+      put("parsedAppLabel", session.archiveInfo?.appLabel ?: "")
+      val logArr = JSONArray()
+      st.logs.forEach { logArr.put(it) }
+      put("logs", logArr)
+    }
+    sendResponse(output, 200, "application/json; charset=UTF-8", json.toString().toByteArray(Charsets.UTF_8))
+  }
+
+  private fun handleTriggerSessionInstall(output: OutputStream) {
+    val archive = PackageInstallerManager.sessionState.value.archiveInfo
+    if (archive == null) {
+      sendResponse(output, 400, "application/json", """{"status":"error","message":"No package currently loaded on device"}""".toByteArray())
+      return
+    }
+    serverScope.launch {
+      PackageInstallerManager.installPackage(context, archive, RootHelper.isRootAvailable())
+    }
+    sendResponse(output, 200, "application/json", """{"status":"ok","message":"Installation session started on device"}""".toByteArray())
+  }
+
   private fun handleListApps(output: OutputStream) {
     if (!_status.value.allowRemoteAppManagement) {
-      sendResponse(output, 403, "application/json", """{"status":"error","message":"端末側で「遠隔アプリ管理権限」がOFFになっています。"}""".toByteArray())
+      sendResponse(output, 403, "application/json", """{"status":"error","message":"Remote App Management permission is disabled on device"}""".toByteArray())
       return
     }
     val apps = runBlocking { AppsManagerRepository.loadInstalledApps(context) }
     val arr = JSONArray()
-    apps.take(200).forEach { app ->
+    apps.take(250).forEach { app ->
       val permArr = JSONArray()
       app.permissions.forEach { p ->
         permArr.put(JSONObject().apply {
@@ -395,9 +504,34 @@ class RemoteInstallerServer(
     sendResponse(output, 200, "application/json; charset=UTF-8", res.toString().toByteArray(Charsets.UTF_8))
   }
 
+  private fun handleAppIcon(query: String, output: OutputStream) {
+    val params = parseQueryParams(query)
+    val pkg = params["pkg"] ?: ""
+    if (pkg.isNotBlank()) {
+      try {
+        val drawable = context.packageManager.getApplicationIcon(pkg)
+        val bmp = Bitmap.createBitmap(
+          drawable.intrinsicWidth.coerceAtLeast(64),
+          drawable.intrinsicHeight.coerceAtLeast(64),
+          Bitmap.Config.ARGB_8888
+        )
+        val canvas = android.graphics.Canvas(bmp)
+        drawable.setBounds(0, 0, canvas.width, canvas.height)
+        drawable.draw(canvas)
+        val baos = ByteArrayOutputStream()
+        bmp.compress(Bitmap.CompressFormat.PNG, 90, baos)
+        sendResponse(output, 200, "image/png", baos.toByteArray())
+        return
+      } catch (_: Exception) {}
+    }
+    // Fallback clean SVG icon
+    val fallbackSvg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#2563eb"/><path d="M20 26h24v20a4 4 0 0 1-4 4H24a4 4 0 0 1-4-4V26z" fill="#fff"/></svg>"""
+    sendResponse(output, 200, "image/svg+xml", fallbackSvg.toByteArray(Charsets.UTF_8))
+  }
+
   private fun handleLaunchApp(headers: Map<String, String>, input: InputStream, output: OutputStream) {
     if (!_status.value.allowRemoteAppManagement) {
-      sendResponse(output, 403, "application/json", """{"status":"error","message":"遠隔アプリ管理権限が無効です"}""".toByteArray())
+      sendResponse(output, 403, "application/json", """{"status":"error","message":"Remote App Management permission is disabled"}""".toByteArray())
       return
     }
     val json = readJsonBody(headers, input)
@@ -408,13 +542,13 @@ class RemoteInstallerServer(
       output,
       if (ok) 200 else 400,
       "application/json",
-      """{"status":"${if (ok) "ok" else "error"}","message":"${if (ok) "端末上で $pkg を起動しました" else "起動インテントが見つかりません"}"}""".toByteArray()
+      """{"status":"${if (ok) "ok" else "error"}","message":"${if (ok) "Launched $pkg on device" else "Launch intent not found"}"}""".toByteArray()
     )
   }
 
   private fun handleUninstallApp(headers: Map<String, String>, input: InputStream, output: OutputStream) {
     if (!_status.value.allowRemoteAppManagement) {
-      sendResponse(output, 403, "application/json", """{"status":"error","message":"遠隔アプリ管理権限が無効です"}""".toByteArray())
+      sendResponse(output, 403, "application/json", """{"status":"error","message":"Remote App Management permission is disabled"}""".toByteArray())
       return
     }
     val json = readJsonBody(headers, input)
@@ -432,7 +566,7 @@ class RemoteInstallerServer(
     }
     addLog("PCから遠隔アンインストール要求: $pkg")
     onRemoteStateChanged?.invoke()
-    sendResponse(output, 200, "application/json", """{"status":"ok","message":"端末側でアンインストールを実行しました"}""".toByteArray())
+    sendResponse(output, 200, "application/json", """{"status":"ok","message":"Uninstall requested on device for $pkg"}""".toByteArray())
   }
 
   private fun handleExportApp(query: String, output: OutputStream) {
@@ -440,27 +574,19 @@ class RemoteInstallerServer(
       sendResponse(output, 403, "text/plain; charset=UTF-8", "Forbidden: Remote App Management disabled".toByteArray())
       return
     }
-    val pkg = query.split("&").mapNotNull {
-      val kv = it.split("=")
-      if (kv.size == 2 && kv[0] == "pkg") URLDecoder.decode(kv[1], "UTF-8") else null
-    }.firstOrNull() ?: ""
+    val params = parseQueryParams(query)
+    val pkg = params["pkg"] ?: ""
+    val fmtStr = params["format"] ?: "apk"
+    val fmt = BackupExportFormat.values().find { it.extension.equals(fmtStr, ignoreCase = true) } ?: BackupExportFormat.APK
 
     val backupResult = runBlocking {
-      BackupManager.backupApp(context, pkg, false, BackupExportFormat.APK)
+      BackupManager.backupApp(context, pkg, false, fmt)
     }
     val item = backupResult.getOrNull()
     val file = item?.let { File(it.filePath) }
     if (file != null && file.exists()) {
-      addLog("PCへAPKエクスポート送信: ${file.name}")
-      val header = "HTTP/1.1 200 OK\r\n" +
-        "Content-Type: application/octet-stream\r\n" +
-        "Content-Disposition: attachment; filename=\"${file.name}\"\r\n" +
-        "Content-Length: ${file.length()}\r\n" +
-        "Access-Control-Allow-Origin: *\r\n" +
-        "Connection: close\r\n\r\n"
-      output.write(header.toByteArray(Charsets.UTF_8))
-      FileInputStream(file).use { fis -> fis.copyTo(output) }
-      output.flush()
+      addLog("PCへパッケージ抽出送信: ${file.name}")
+      streamFileDownload(output, file)
     } else {
       sendResponse(output, 404, "text/plain", "Package not found".toByteArray())
     }
@@ -468,7 +594,7 @@ class RemoteInstallerServer(
 
   private fun handleUpdateMetadata(headers: Map<String, String>, input: InputStream, output: OutputStream) {
     if (!_status.value.allowRemotePermissionEdit) {
-      sendResponse(output, 403, "application/json", """{"status":"error","message":"遠隔での権限・メタデータ編集が許可されていません"}""".toByteArray())
+      sendResponse(output, 403, "application/json", """{"status":"error","message":"Remote metadata editing permission is disabled"}""".toByteArray())
       return
     }
     val json = readJsonBody(headers, input)
@@ -486,14 +612,36 @@ class RemoteInstallerServer(
       customCategory = json.optString("customCategory", "ユーティリティ")
     )
     AppsManagerRepository.saveMetadataOverride(context, override)
+    val reinstallModified = json.optBoolean("reinstallModified", false)
+
+    if (reinstallModified) {
+      serverScope.launch {
+        val apps = AppsManagerRepository.loadInstalledApps(context)
+        val targetApp = apps.find { it.packageName == origPkg }
+        if (targetApp != null) {
+          val patched = AppsManagerRepository.createModifiedApkFile(
+            context = context,
+            sourceApkPath = targetApp.sourceDir,
+            originalPackageName = origPkg,
+            newPackageName = override.customPackageName,
+            originalLabel = targetApp.appLabel,
+            newLabel = override.customAppLabel,
+            originalVersionName = targetApp.versionName,
+            newVersionName = override.customVersionName
+          )
+          onPackageReceivedAdvanced?.invoke(patched, override, true)
+        }
+      }
+    }
+
     addLog("PCからアプリ情報変更: $origPkg -> ${override.customAppLabel} (${override.customPackageName})")
     onRemoteStateChanged?.invoke()
-    sendResponse(output, 200, "application/json", """{"status":"ok","message":"アプリ情報を更新しました"}""".toByteArray())
+    sendResponse(output, 200, "application/json", """{"status":"ok","message":"Metadata updated (${override.customPackageName})"}""".toByteArray())
   }
 
   private fun handleTogglePermission(headers: Map<String, String>, input: InputStream, output: OutputStream) {
     if (!_status.value.allowRemotePermissionEdit) {
-      sendResponse(output, 403, "application/json", """{"status":"error","message":"遠隔での権限編集が許可されていません"}""".toByteArray())
+      sendResponse(output, 403, "application/json", """{"status":"error","message":"Remote permission editing is disabled"}""".toByteArray())
       return
     }
     val json = readJsonBody(headers, input)
@@ -504,7 +652,7 @@ class RemoteInstallerServer(
     val (ok, msg) = runBlocking {
       AppsManagerRepository.toggleAppPermission(context, pkg, perm, grant)
     }
-    addLog("PCから遠隔権限変更: $pkg [$perm -> ${if (grant) "許可" else "拒否"}]")
+    addLog("PCから遠隔権限変更: $pkg [$perm -> ${if (grant) "Grant" else "Revoke"}]")
     onRemoteStateChanged?.invoke()
     sendResponse(output, if (ok) 200 else 400, "application/json", JSONObject().apply {
       put("status", if (ok) "ok" else "error")
@@ -512,16 +660,142 @@ class RemoteInstallerServer(
     }.toString().toByteArray(Charsets.UTF_8))
   }
 
+  private fun handleListBackups(output: OutputStream) {
+    val backups = runBlocking { BackupManager.listBackups(context) }
+    val arr = JSONArray()
+    backups.forEach { b ->
+      arr.put(JSONObject().apply {
+        put("id", b.id)
+        put("packageName", b.packageName)
+        put("appLabel", b.appLabel)
+        put("versionName", b.versionName)
+        put("format", b.exportFormat.extension)
+        put("sizeMB", (b.sizeBytes / 1024 / 1024).coerceAtLeast(1))
+      })
+    }
+    val res = JSONObject().apply {
+      put("status", "ok")
+      put("backups", arr)
+    }
+    sendResponse(output, 200, "application/json; charset=UTF-8", res.toString().toByteArray(Charsets.UTF_8))
+  }
+
+  private fun handleCreateBackup(headers: Map<String, String>, input: InputStream, output: OutputStream) {
+    if (!_status.value.allowRemoteAppManagement) {
+      sendResponse(output, 403, "application/json", """{"status":"error","message":"Remote App Management permission is disabled"}""".toByteArray())
+      return
+    }
+    val json = readJsonBody(headers, input)
+    val pkg = json.optString("packageName", "").trim()
+    val fmtExt = json.optString("format", "apks").trim()
+    val fmt = BackupExportFormat.values().find { it.extension.equals(fmtExt, ignoreCase = true) } ?: BackupExportFormat.APKS
+
+    val res = runBlocking {
+      BackupManager.backupApp(context, pkg, false, fmt)
+    }
+    onRemoteStateChanged?.invoke()
+    if (res.isSuccess) {
+      val item = res.getOrNull()
+      val exportedName = item?.let { File(it.filePath).name } ?: pkg
+      addLog("PCからバックアップ作成: $exportedName")
+      sendResponse(output, 200, "application/json", """{"status":"ok","message":"Created backup: $exportedName"}""".toByteArray())
+    } else {
+      sendResponse(output, 400, "application/json", """{"status":"error","message":"Backup failed: ${res.exceptionOrNull()?.message}"}""".toByteArray())
+    }
+  }
+
+  private fun handleDownloadBackup(query: String, output: OutputStream) {
+    val params = parseQueryParams(query)
+    val id = params["id"] ?: ""
+    val item = runBlocking { BackupManager.listBackups(context) }.find { it.id == id }
+    val file = item?.let { File(it.filePath) }
+    if (file != null && file.exists()) {
+      streamFileDownload(output, file)
+    } else {
+      sendResponse(output, 404, "text/plain", "Backup archive not found".toByteArray())
+    }
+  }
+
+  private fun handleRestoreBackup(headers: Map<String, String>, input: InputStream, output: OutputStream) {
+    val json = readJsonBody(headers, input)
+    val id = json.optString("id", "")
+    val item = runBlocking { BackupManager.listBackups(context) }.find { it.id == id }
+    val file = item?.let { File(it.filePath) }
+    if (file != null && file.exists()) {
+      onPackageReceivedAdvanced?.invoke(file, null, true) ?: onPackageReceived(file)
+      sendResponse(output, 200, "application/json", """{"status":"ok","message":"Restoring ${item.appLabel} on device"}""".toByteArray())
+    } else {
+      sendResponse(output, 404, "application/json", """{"status":"error","message":"Backup not found"}""".toByteArray())
+    }
+  }
+
+  private fun handleDeleteBackup(headers: Map<String, String>, input: InputStream, output: OutputStream) {
+    val json = readJsonBody(headers, input)
+    val id = json.optString("id", "")
+    val item = runBlocking { BackupManager.listBackups(context) }.find { it.id == id }
+    if (item != null) {
+      val name = File(item.filePath).name
+      runBlocking { BackupManager.deleteBackup(item) }
+      onRemoteStateChanged?.invoke()
+      sendResponse(output, 200, "application/json", """{"status":"ok","message":"Deleted backup $name"}""".toByteArray())
+    } else {
+      sendResponse(output, 404, "application/json", """{"status":"error","message":"Backup not found"}""".toByteArray())
+    }
+  }
+
+  private fun handleListStore(output: OutputStream) {
+    val apps = getStoreAppsProvider?.invoke() ?: StoreRepository.defaultCuratedApps
+    val arr = JSONArray()
+    apps.forEach { app ->
+      arr.put(JSONObject().apply {
+        put("id", app.id)
+        put("name", app.name)
+        put("packageName", app.packageName)
+        put("author", app.author)
+        put("latestVersion", app.latestVersion)
+        put("category", app.category)
+      })
+    }
+    val res = JSONObject().apply {
+      put("status", "ok")
+      put("apps", arr)
+    }
+    sendResponse(output, 200, "application/json; charset=UTF-8", res.toString().toByteArray(Charsets.UTF_8))
+  }
+
+  private fun handleAddStoreRepos(headers: Map<String, String>, input: InputStream, output: OutputStream) {
+    val json = readJsonBody(headers, input)
+    val rawInput = json.optString("rawInput", "").trim()
+    if (rawInput.isNotBlank()) {
+      onBatchImportStoreSources?.invoke(rawInput)
+      addLog("PCからストアリポジトリ一括追加要求を受信")
+    }
+    sendResponse(output, 200, "application/json", """{"status":"ok","message":"Repository sync started on device"}""".toByteArray())
+  }
+
+  private fun handleInstallStoreApp(headers: Map<String, String>, input: InputStream, output: OutputStream) {
+    val json = readJsonBody(headers, input)
+    val id = json.optString("id", "")
+    val apps = getStoreAppsProvider?.invoke() ?: StoreRepository.defaultCuratedApps
+    val target = apps.find { it.id == id }
+    if (target != null) {
+      onInstallStoreApp?.invoke(target)
+      sendResponse(output, 200, "application/json", """{"status":"ok","message":"Downloading ${target.name} on device"}""".toByteArray())
+    } else {
+      sendResponse(output, 404, "application/json", """{"status":"error","message":"Store app not found"}""".toByteArray())
+    }
+  }
+
   private fun handleCleanCache(output: OutputStream) {
     if (!_status.value.allowRemotePermissionEdit) {
-      sendResponse(output, 403, "application/json", """{"status":"error","message":"遠隔でのシステム最適化権限がOFFです"}""".toByteArray())
+      sendResponse(output, 403, "application/json", """{"status":"error","message":"Remote system maintenance permission is disabled"}""".toByteArray())
       return
     }
     val freedBytes = runBlocking { AppsManagerRepository.cleanCaches(context) }
     val mb = freedBytes / 1024 / 1024
     addLog("PCから遠隔キャッシュ消去を実行 (${mb}MB 解放)")
     onRemoteStateChanged?.invoke()
-    sendResponse(output, 200, "application/json", """{"status":"ok","message":"キャッシュを ${mb}MB クリーンアップしました"}""".toByteArray())
+    sendResponse(output, 200, "application/json", """{"status":"ok","message":"Cleaned ${mb} MB of temporary cache"}""".toByteArray())
   }
 
   private fun handleRemoteUrlInstall(
@@ -530,7 +804,7 @@ class RemoteInstallerServer(
     output: OutputStream
   ) {
     if (!_status.value.allowRemoteUrlInstall) {
-      sendResponse(output, 403, "application/json", """{"status":"error","message":"遠隔URLインストール権限がOFFです"}""".toByteArray())
+      sendResponse(output, 403, "application/json", """{"status":"error","message":"Remote URL installation permission is disabled"}""".toByteArray())
       return
     }
     val json = readJsonBody(headers, input)
@@ -539,9 +813,60 @@ class RemoteInstallerServer(
     if (url.startsWith("http://") || url.startsWith("https://")) {
       addLog("PCから直リンク導入リクエストを受信: $url")
       onDirectUrlReceived?.invoke(url)
-      sendResponse(output, 200, "application/json", """{"status":"ok","message":"Direct URL queued on device!"}""".toByteArray())
+      sendResponse(output, 200, "application/json", """{"status":"ok","message":"Direct URL download started on device"}""".toByteArray())
     } else {
-      sendResponse(output, 400, "application/json", """{"status":"error","message":"Invalid URL scheme"}""".toByteArray())
+      sendResponse(output, 400, "application/json", """{"status":"error","message":"Invalid HTTP/HTTPS URL"}""".toByteArray())
+    }
+  }
+
+  private fun extractOverrideFromHeaders(headers: Map<String, String>): AppMetadataOverride? {
+    val customLabel = headers["x-custom-label"]?.let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) } ?: ""
+    val customPkg = headers["x-custom-pkg"]?.let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) } ?: ""
+    val customVer = headers["x-custom-vername"]?.let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) } ?: ""
+    val customCode = headers["x-custom-vercode"]?.toLongOrNull() ?: 0L
+    val customCat = headers["x-custom-category"]?.let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) } ?: ""
+
+    if (customLabel.isBlank() && customPkg.isBlank() && customVer.isBlank() && customCode <= 0L && customCat.isBlank()) {
+      return null
+    }
+    return AppMetadataOverride(
+      originalPackageName = "",
+      customAppLabel = customLabel,
+      customPackageName = customPkg,
+      customVersionName = customVer,
+      customVersionCode = customCode,
+      customCategory = customCat
+    )
+  }
+
+  private fun handleUploadBundle(
+    query: String,
+    headers: Map<String, String>,
+    input: InputStream,
+    output: OutputStream
+  ) {
+    val params = parseQueryParams(query)
+    val batchId = params["batchId"] ?: "default_batch"
+    val finalize = params["finalize"] == "1"
+    val autoInstall = params["autoInstall"] == "1" || headers["x-auto-install"] == "1"
+
+    val savedFile = saveUploadedStreamToFile(headers, input)
+    if (savedFile.exists() && savedFile.length() > 0) {
+      val list = multiApkBatches.getOrPut(batchId) { mutableListOf() }
+      synchronized(list) {
+        list.add(savedFile)
+      }
+      _status.value = _status.value.copy(
+        uploadedFilesCount = _status.value.uploadedFilesCount + 1
+      )
+      if (finalize) {
+        val completedList = multiApkBatches.remove(batchId)?.toList() ?: listOf(savedFile)
+        addLog("マルチAPKバンドル受信完了 (${completedList.size} 個のファイル)")
+        onMultiplePackagesReceived?.invoke(completedList, autoInstall)
+      }
+      sendResponse(output, 200, "application/json", """{"status":"ok","message":"Split APK part uploaded"}""".toByteArray())
+    } else {
+      sendResponse(output, 400, "application/json", """{"status":"error","message":"Empty split file"}""".toByteArray())
     }
   }
 
@@ -550,6 +875,32 @@ class RemoteInstallerServer(
     input: InputStream,
     output: OutputStream
   ) {
+    val savedFile = saveUploadedStreamToFile(headers, input)
+    val autoInstall = headers["x-auto-install"] == "1"
+    val overrideMeta = extractOverrideFromHeaders(headers)
+
+    if (savedFile.exists() && savedFile.length() > 0) {
+      addLog("パッケージ受信完了: ${savedFile.name} (${savedFile.length() / 1024} KB)")
+      _status.value = _status.value.copy(
+        uploadedFilesCount = _status.value.uploadedFilesCount + 1
+      )
+      if (onPackageReceivedAdvanced != null) {
+        onPackageReceivedAdvanced.invoke(savedFile, overrideMeta, autoInstall)
+      } else {
+        onPackageReceived(savedFile)
+      }
+
+      val responseJson = """{"status":"ok","message":"Package transferred to Android device"}"""
+      sendResponse(output, 200, "application/json", responseJson.toByteArray(Charsets.UTF_8))
+    } else {
+      sendResponse(output, 400, "application/json", """{"status":"error","message":"No file uploaded"}""".toByteArray())
+    }
+  }
+
+  private fun saveUploadedStreamToFile(
+    headers: Map<String, String>,
+    input: InputStream
+  ): File {
     val contentType = headers["content-type"] ?: ""
     val contentLength = headers["content-length"]?.toLongOrNull() ?: 0L
 
@@ -561,7 +912,6 @@ class RemoteInstallerServer(
     }
 
     val savedFile: File
-
     if (!rawFilename.isNullOrBlank()) {
       val safeName = rawFilename.replace("/", "_").replace("\\", "_")
       savedFile = File(uploadDir, "${System.currentTimeMillis()}_$safeName")
@@ -570,7 +920,12 @@ class RemoteInstallerServer(
         val buffer = ByteArray(65536)
         var totalRead = 0L
         while (contentLength <= 0L || totalRead < contentLength) {
-          val bytesRead = input.read(buffer)
+          val toRead = if (contentLength > 0L) {
+            minOf(buffer.size.toLong(), contentLength - totalRead).toInt()
+          } else {
+            buffer.size
+          }
+          val bytesRead = input.read(buffer, 0, toRead)
           if (bytesRead == -1) break
           fos.write(buffer, 0, bytesRead)
           totalRead += bytesRead
@@ -596,19 +951,7 @@ class RemoteInstallerServer(
         }
       }
     }
-
-    if (savedFile.exists() && savedFile.length() > 0) {
-      addLog("パッケージ受信完了: ${savedFile.name} (${savedFile.length() / 1024} KB)")
-      _status.value = _status.value.copy(
-        uploadedFilesCount = _status.value.uploadedFilesCount + 1
-      )
-      onPackageReceived(savedFile)
-
-      val responseJson = """{"status":"ok","message":"Package received! Parsing & installing on Android..."}"""
-      sendResponse(output, 200, "application/json", responseJson.toByteArray(Charsets.UTF_8))
-    } else {
-      sendResponse(output, 400, "application/json", """{"status":"error","message":"No file uploaded"}""".toByteArray())
-    }
+    return savedFile
   }
 
   private fun parseMultipartAndSave(boundary: String, input: InputStream, uploadDir: File): File {
@@ -669,242 +1012,23 @@ class RemoteInstallerServer(
     }
   }
 
-  private fun serveHtml(output: OutputStream) {
-    val deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}"
-    val osVer = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
-    val st = _status.value
-
-    val html = """
-      <!DOCTYPE html>
-      <html lang="ja">
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>OmniInstaller - PC Remote Suite</title>
-        <style>
-          * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-          body { background: #090d16; color: #f1f5f9; min-height: 100vh; padding: 24px; display: flex; justify-content: center; }
-          .container { width: 100%; max-width: 860px; background: #111827; border: 1px solid #1f2937; border-radius: 22px; padding: 28px; box-shadow: 0 20px 50px rgba(0,0,0,0.6); }
-          .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; flex-wrap: wrap; gap: 10px; }
-          .brand { display: flex; align-items: center; gap: 14px; }
-          .icon { width: 46px; height: 46px; background: linear-gradient(135deg, #2563eb, #06b6d4); border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 22px; }
-          h1 { font-size: 20px; font-weight: 700; color: #fff; }
-          .dev { font-size: 11px; color: #38bdf8; font-weight: 600; }
-          .badge { background: #064e3b; color: #34d399; font-size: 12px; padding: 5px 12px; border-radius: 999px; font-weight: 600; }
-          .tabs { display: flex; gap: 8px; margin-bottom: 18px; border-bottom: 1px solid #1f2937; padding-bottom: 12px; flex-wrap: wrap; }
-          .tab-btn { background: #1e293b; color: #cbd5e1; border: none; padding: 9px 16px; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 13px; }
-          .tab-btn.active { background: #2563eb; color: #fff; }
-          .panel { display: none; }
-          .panel.active { display: block; }
-          .info-card { background: #182234; border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; font-size: 12px; color: #94a3b8; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
-          .dropzone { border: 2px dashed #3b82f6; background: rgba(37, 99, 235, 0.06); border-radius: 16px; padding: 36px 20px; text-align: center; cursor: pointer; transition: all 0.2s; }
-          .dropzone:hover, .dropzone.dragover { background: rgba(37, 99, 235, 0.16); border-color: #38bdf8; }
-          .url-box { margin-top: 16px; background: #182234; border-radius: 14px; padding: 16px; }
-          .url-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
-          input[type="text"] { flex: 1; min-width: 180px; background: #090d16; border: 1px solid #334155; color: #fff; padding: 9px 12px; border-radius: 9px; font-size: 13px; }
-          button { background: #2563eb; color: #fff; border: none; padding: 9px 15px; border-radius: 9px; font-weight: 600; cursor: pointer; font-size: 12px; }
-          button.danger { background: #dc2626; }
-          button.secondary { background: #334155; }
-          .app-row { background: #182234; border-radius: 12px; padding: 14px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
-          .app-title { font-weight: 700; font-size: 14px; color: #fff; }
-          .app-sub { font-size: 11px; color: #94a3b8; font-family: monospace; }
-          .status-msg { margin-top: 12px; font-size: 13px; color: #38bdf8; font-weight: 600; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <div class="brand">
-              <div class="icon">🚀</div>
-              <div>
-                <h1>OmniInstaller PC Remote Control</h1>
-                <div class="dev">Developer: Hikaproj • $deviceModel ($osVer)</div>
-              </div>
-            </div>
-            <span class="badge">● Port ${st.port}</span>
-          </div>
-
-          <div class="tabs">
-            <button class="tab-btn active" onclick="switchTab('install')">📦 パッケージ導入</button>
-            <button class="tab-btn" onclick="switchTab('apps')">📱 端末アプリ管理・情報編集</button>
-            <button class="tab-btn" onclick="switchTab('system')">🛡️ 遠隔権限・キャッシュ管理</button>
-          </div>
-
-          <div id="panel-install" class="panel active">
-            <div class="dropzone" id="dropzone">
-              <div style="font-size: 36px; margin-bottom: 8px;">📦</div>
-              <div style="font-size: 15px; font-weight: 600;">APK / XAPK / APKS / APKM / ZIP / TAR.GZ をドラッグ＆ドロップ</div>
-              <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">クリックしてPC内のファイルを選択</div>
-            </div>
-            <input type="file" id="fileInput" style="display:none">
-            <div class="url-box">
-              <div style="font-size: 13px; font-weight: 600;">🔗 APK / パッケージ直リンクを端末へ送信してインストール</div>
-              <div class="url-row">
-                <input type="text" id="directUrlInput" placeholder="https://example.com/release/app.apk">
-                <button onclick="sendDirectUrl()">端末でダウンロード＆導入</button>
-              </div>
-            </div>
-          </div>
-
-          <div id="panel-apps" class="panel">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-              <div style="font-size:13px; color:#94a3b8;">端末側で「遠隔アプリ管理権限」がONの場合、一覧取得・起動・APK抽出・削除・バンドル名変更が可能です。</div>
-              <button onclick="loadApps()">🔄 一覧を再取得</button>
-            </div>
-            <div id="appsContainer">「一覧を再取得」を押してください。</div>
-          </div>
-
-          <div id="panel-system" class="panel">
-            <div class="url-box">
-              <div style="font-size:14px; font-weight:700; margin-bottom:8px;">🧹 端末キャッシュの一括クリーンアップ</div>
-              <button onclick="cleanRemoteCache()">キャッシュ消去を実行</button>
-            </div>
-            <div class="url-box" style="margin-top:14px;">
-              <div style="font-size:14px; font-weight:700; margin-bottom:8px;">🔐 遠隔からアプリの権限を切り替え (Grant / Revoke)</div>
-              <div class="url-row">
-                <input type="text" id="permPkgInput" placeholder="パッケージ名 (例: com.termux)">
-                <input type="text" id="permNameInput" placeholder="権限名 (例: android.permission.CAMERA)">
-                <button onclick="setRemotePerm(true)">許可 (Grant)</button>
-                <button class="danger" onclick="setRemotePerm(false)">拒否 (Revoke)</button>
-              </div>
-            </div>
-          </div>
-
-          <div class="status-msg" id="statusMsg">待機中</div>
-        </div>
-
-        <script>
-          const statusMsg = document.getElementById('statusMsg');
-          function switchTab(name) {
-            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            document.getElementById('panel-' + name).classList.add('active');
-            event.target.classList.add('active');
-            if (name === 'apps') loadApps();
-          }
-
-          const dropzone = document.getElementById('dropzone');
-          const fileInput = document.getElementById('fileInput');
-          dropzone.addEventListener('click', () => fileInput.click());
-          dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
-          dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
-          dropzone.addEventListener('drop', e => {
-            e.preventDefault();
-            dropzone.classList.remove('dragover');
-            if (e.dataTransfer.files.length > 0) uploadFile(e.dataTransfer.files[0]);
-          });
-          fileInput.addEventListener('change', () => {
-            if (fileInput.files.length > 0) uploadFile(fileInput.files[0]);
-          });
-
-          function uploadFile(file) {
-            statusMsg.textContent = 'アップロード中: ' + file.name + ' ...';
-            const xhr = new XMLHttpRequest();
-            xhr.open('POST', '/upload', true);
-            xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name));
-            xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-            xhr.onload = () => {
-              statusMsg.textContent = xhr.status === 200 ? '✅ 転送完了！端末側で解析画面を開きました。' : '❌ 転送失敗';
-            };
-            xhr.send(file);
-          }
-
-          function sendDirectUrl() {
-            const url = document.getElementById('directUrlInput').value.trim();
-            if (!url) return;
-            statusMsg.textContent = '直リンクを送信中...';
-            fetch('/install-url', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url})})
-              .then(r => r.json()).then(d => { statusMsg.textContent = d.message || '送信完了'; });
-          }
-
-          function loadApps() {
-            const box = document.getElementById('appsContainer');
-            box.innerHTML = '読み込み中...';
-            fetch('/api/apps').then(r => r.json()).then(data => {
-              if (data.status !== 'ok') {
-                box.innerHTML = '<div style="color:#f87171;">' + (data.message || '権限が無効です') + '</div>';
-                return;
-              }
-              box.innerHTML = '';
-              data.apps.forEach(app => {
-                const row = document.createElement('div');
-                row.className = 'app-row';
-                row.innerHTML = '<div>' +
-                  '<div class="app-title">' + app.appLabel + ' <span style="font-size:11px;color:#38bdf8;">[' + app.category + ']</span></div>' +
-                  '<div class="app-sub">' + app.customPackageName + ' • v' + app.versionName + ' • ' + app.sizeMB + 'MB</div>' +
-                  '</div>' +
-                  '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
-                  '<button onclick="launchApp(\'' + app.packageName + '\')">起動</button>' +
-                  '<button class="secondary" onclick="window.location=\'/api/apps/export?pkg=' + encodeURIComponent(app.packageName) + '\'">APK抽出</button>' +
-                  '<button class="secondary" onclick="promptEditMeta(\'' + app.packageName + '\',\'' + app.appLabel.replace(/'/g,"") + '\',\'' + app.customPackageName + '\',\'' + app.versionName + '\',\'' + app.category + '\')">情報変更</button>' +
-                  '<button class="danger" onclick="uninstallApp(\'' + app.packageName + '\')">削除</button>' +
-                  '</div>';
-                box.appendChild(row);
-              });
-            });
-          }
-
-          function launchApp(pkg) {
-            fetch('/api/apps/launch', {method:'POST', body:JSON.stringify({packageName:pkg})})
-              .then(r => r.json()).then(d => { statusMsg.textContent = d.message; });
-          }
-
-          function uninstallApp(pkg) {
-            if (!confirm(pkg + ' をアンインストールしますか？')) return;
-            fetch('/api/apps/uninstall', {method:'POST', body:JSON.stringify({packageName:pkg})})
-              .then(r => r.json()).then(d => { statusMsg.textContent = d.message; loadApps(); });
-          }
-
-          function promptEditMeta(origPkg, label, customPkg, ver, cat) {
-            const newLabel = prompt('新しいアプリ表示名:', label);
-            if (newLabel === null) return;
-            const newPkg = prompt('新しいバンドル名 (パッケージ名):', customPkg) || customPkg;
-            const newVer = prompt('新しいバージョン表記:', ver) || ver;
-            const newCat = prompt('新しいジャンル:', cat) || cat;
-            fetch('/api/apps/metadata', {
-              method:'POST',
-              body:JSON.stringify({originalPackageName:origPkg, customAppLabel:newLabel, customPackageName:newPkg, customVersionName:newVer, customVersionCode:1, customCategory:newCat})
-            }).then(r => r.json()).then(d => { statusMsg.textContent = d.message; loadApps(); });
-          }
-
-          function cleanRemoteCache() {
-            fetch('/api/system/clean-cache', {method:'POST'}).then(r => r.json()).then(d => { statusMsg.textContent = d.message; });
-          }
-
-          function setRemotePerm(grant) {
-            const pkg = document.getElementById('permPkgInput').value.trim();
-            const perm = document.getElementById('permNameInput').value.trim();
-            if (!pkg || !perm) return;
-            fetch('/api/apps/permission', {method:'POST', body:JSON.stringify({packageName:pkg, permission:perm, grant:grant})})
-              .then(r => r.json()).then(d => { statusMsg.textContent = d.message; });
-          }
-        </script>
-      </body>
-      </html>
-    """.trimIndent()
-
-    sendResponse(output, 200, "text/html; charset=UTF-8", html.toByteArray(Charsets.UTF_8))
-  }
-
-  private fun serveStatus(output: OutputStream) {
-    val st = _status.value
-    val json = JSONObject().apply {
-      put("running", st.isRunning)
-      put("port", st.port)
-      put("uploads", st.uploadedFilesCount)
-      put("allowRemoteAppManagement", st.allowRemoteAppManagement)
-      put("allowRemotePermissionEdit", st.allowRemotePermissionEdit)
-      put("allowRemoteUrlInstall", st.allowRemoteUrlInstall)
-      put("developer", "Hikaproj")
-    }
-    sendResponse(output, 200, "application/json", json.toString().toByteArray(Charsets.UTF_8))
+  private fun streamFileDownload(output: OutputStream, file: File) {
+    val header = "HTTP/1.1 200 OK\r\n" +
+      "Content-Type: application/octet-stream\r\n" +
+      "Content-Disposition: attachment; filename=\"${file.name}\"\r\n" +
+      "Content-Length: ${file.length()}\r\n" +
+      "Access-Control-Allow-Origin: *\r\n" +
+      "Connection: close\r\n\r\n"
+    output.write(header.toByteArray(Charsets.UTF_8))
+    FileInputStream(file).use { fis -> fis.copyTo(output, 65536) }
+    output.flush()
   }
 
   private fun sendCorsPreflight(output: OutputStream) {
     val header = "HTTP/1.1 204 No Content\r\n" +
       "Access-Control-Allow-Origin: *\r\n" +
       "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
-      "Access-Control-Allow-Headers: Content-Type, X-Filename\r\n" +
+      "Access-Control-Allow-Headers: Content-Type, X-Filename, X-Auto-Install, X-Custom-Label, X-Custom-Pkg, X-Custom-VerName, X-Custom-VerCode, X-Custom-Category\r\n" +
       "Connection: close\r\n\r\n"
     output.write(header.toByteArray(Charsets.UTF_8))
     output.flush()
@@ -924,7 +1048,7 @@ class RemoteInstallerServer(
       "Connection: close\r\n" +
       "Access-Control-Allow-Origin: *\r\n" +
       "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
-      "Access-Control-Allow-Headers: Content-Type, X-Filename\r\n\r\n"
+      "Access-Control-Allow-Headers: Content-Type, X-Filename, X-Auto-Install, X-Custom-Label, X-Custom-Pkg, X-Custom-VerName, X-Custom-VerCode, X-Custom-Category\r\n\r\n"
     output.write(header.toByteArray(Charsets.UTF_8))
     output.write(data)
     output.flush()
