@@ -53,23 +53,31 @@ jobs:
             -keypass android123 \
             -dname "CN=OmniInstaller, OU=Dev, O=Hikaproj, L=Kobe, S=Hyogo, C=JP"
 
-      - name: Build Signed Release APK
+      - name: Build Signed Release APK with Version from GitHub Actions
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
           STORE_PASSWORD: android123
           KEY_PASSWORD: android123
+          APP_VERSION_NAME: "1.0.${{ github.run_number }}"
+          APP_VERSION_CODE: "${{ github.run_number }}"
         run: |
-          ./gradlew assembleRelease -x lintVitalRelease --stacktrace
+          ./gradlew assembleRelease \
+            -PAPP_VERSION_NAME="1.0.${{ github.run_number }}" \
+            -PAPP_VERSION_CODE="${{ github.run_number }}" \
+            -x lintVitalRelease --stacktrace
 
-      - name: Rename Release APK
+      - name: Verify & Standardize Release APK Name
         run: |
           VERSION_TAG="1.0.${{ github.run_number }}"
-          for f in app/build/outputs/apk/release/*.apk; do
-            if [ -f "$f" ]; then
-              cp "$f" "app/build/outputs/apk/release/hikaproj-ominiinstaller-v${VERSION_TAG}.apk"
-              break
-            fi
-          done
+          TARGET_APK="app/build/outputs/apk/release/hikaproj-ominiinstaller-v${VERSION_TAG}.apk"
+          if [ ! -f "$TARGET_APK" ]; then
+            for f in app/build/outputs/apk/release/*.apk; do
+              if [ -f "$f" ]; then
+                cp "$f" "$TARGET_APK"
+                break
+              fi
+            done
+          fi
 
       - name: Clean up temporary keystore
         if: always()

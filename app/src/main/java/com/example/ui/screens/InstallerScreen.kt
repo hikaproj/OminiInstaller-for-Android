@@ -26,28 +26,35 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LibraryAdd
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -71,11 +78,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.ApkArchiveInfo
 import com.example.model.ArchiveFormat
 import com.example.model.InstallStatus
+import com.example.optimizer.AppsManagerRepository
 import com.example.ui.MainViewModel
 import com.example.ui.components.AppHeader
 import com.example.ui.theme.AccentDanger
@@ -96,6 +105,7 @@ fun InstallerScreen(
   val directUrlProgress by viewModel.directUrlProgress.collectAsState()
   val installState by viewModel.installSessionState.collectAsState()
   val optimizationState by viewModel.optimizationState.collectAsState()
+  val installedApps by viewModel.installedApps.collectAsState()
 
   var useRootInstall by remember { mutableStateOf(false) }
   var directApkUrl by remember { mutableStateOf("") }
@@ -130,7 +140,7 @@ fun InstallerScreen(
   ) {
     AppHeader(
       title = "万能インストーラー",
-      subtitle = "25種類以上の特殊パッケージ・複数APK・直リンクURLに完全対応 (by Hikaproj)",
+      subtitle = "標準パッケージ・複数APK・直リンクURL・導入時メタデータ変更対応",
       isRooted = optimizationState.isRooted
     )
 
@@ -182,7 +192,7 @@ fun InstallerScreen(
               color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-              text = "APK / XAPK / APKS / APKM / OMNI / HPJPKG / TAR.GZ / AAB 等25形式以上",
+              text = "APK / XAPK / APKS / APKM / AAB / ZIP / TAR.GZ / APEX 等に対応",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -211,7 +221,7 @@ fun InstallerScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Expandable 25+ format badges
+        // Expandable format badges
         Row(
           modifier = Modifier
             .fillMaxWidth()
@@ -296,7 +306,7 @@ fun InstallerScreen(
               fontWeight = FontWeight.Bold
             )
             Text(
-              text = "HTTP/HTTPS の直リンク (.apk, .xapk, .apks, .omni 等) を直接ダウンロード＆解析",
+              text = "HTTP/HTTPS の直リンク (.apk, .xapk, .apks, .apkm, .zip 等) を直接取得＆解析",
               fontSize = 11.sp,
               color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -378,6 +388,12 @@ fun InstallerScreen(
 
     // Parsed Archive Preview
     parsedArchive?.let { archive ->
+      val targetPkg = archive.originalPackageName.ifBlank { archive.packageName }
+      val isAlreadyInstalled = installedApps.any {
+        it.packageName == archive.packageName ||
+          it.packageName == targetPkg ||
+          it.customPackageName == archive.packageName
+      }
       ParsedPackageCard(
         archive = archive,
         isRootAvailable = optimizationState.isRooted,
@@ -385,7 +401,19 @@ fun InstallerScreen(
         onToggleRoot = { useRootInstall = it },
         onClear = { viewModel.clearParsedArchive() },
         onInstall = { viewModel.startInstall(useRoot = useRootInstall) },
-        installStatus = installState.status
+        onLaunch = { viewModel.launchInstalledApp(targetPkg) },
+        onUninstall = { viewModel.uninstallSingleApp(targetPkg) },
+        onUpdateOverrides = { label, pkg, verName, verCode, cat ->
+          viewModel.updateParsedArchiveOverrides(
+            customAppLabel = label,
+            customPackageName = pkg,
+            customVersionName = verName,
+            customVersionCode = verCode,
+            customCategory = cat
+          )
+        },
+        installStatus = installState.status,
+        isAlreadyInstalled = isAlreadyInstalled
       )
     }
 
@@ -395,9 +423,21 @@ fun InstallerScreen(
       enter = fadeIn(),
       exit = fadeOut()
     ) {
+      val targetPkg = parsedArchive?.let { it.originalPackageName.ifBlank { it.packageName } } ?: ""
       InstallProgressCard(
         state = installState,
-        onRetry = { viewModel.startInstall(useRoot = useRootInstall) }
+        onRetry = { viewModel.startInstall(useRoot = useRootInstall) },
+        onReinstall = { viewModel.startInstall(useRoot = useRootInstall) },
+        onOpenApp = {
+          if (targetPkg.isNotBlank()) {
+            viewModel.launchInstalledApp(targetPkg)
+          }
+        },
+        onDeleteApp = {
+          if (targetPkg.isNotBlank()) {
+            viewModel.uninstallSingleApp(targetPkg)
+          }
+        }
       )
     }
   }
@@ -412,8 +452,19 @@ fun ParsedPackageCard(
   onToggleRoot: (Boolean) -> Unit,
   onClear: () -> Unit,
   onInstall: () -> Unit,
-  installStatus: InstallStatus
+  onLaunch: () -> Unit,
+  onUninstall: () -> Unit,
+  onUpdateOverrides: (String, String, String, Long, String) -> Unit,
+  installStatus: InstallStatus,
+  isAlreadyInstalled: Boolean
 ) {
+  var showMetadataEditor by remember { mutableStateOf(false) }
+  var editLabel by remember(archive.appLabel) { mutableStateOf(archive.appLabel) }
+  var editPackage by remember(archive.packageName) { mutableStateOf(archive.packageName) }
+  var editVersionName by remember(archive.versionName) { mutableStateOf(archive.versionName) }
+  var editVersionCode by remember(archive.versionCode) { mutableStateOf(archive.versionCode.toString()) }
+  var editCategory by remember(archive.category) { mutableStateOf(archive.category) }
+
   Card(
     modifier = Modifier
       .fillMaxWidth()
@@ -430,18 +481,31 @@ fun ParsedPackageCard(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
       ) {
-        Surface(
-          shape = RoundedCornerShape(8.dp),
-          color = TechPrimary.copy(alpha = 0.15f)
-        ) {
-          Text(
-            text = archive.format.displayName,
-            fontFamily = JetBrainsMono,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            color = TechPrimary,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-          )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+          Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = TechPrimary.copy(alpha = 0.15f)
+          ) {
+            Text(
+              text = archive.format.displayName,
+              fontFamily = JetBrainsMono,
+              fontSize = 11.sp,
+              fontWeight = FontWeight.Bold,
+              color = TechPrimary,
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+          }
+          Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant
+          ) {
+            Text(
+              text = archive.category,
+              fontSize = 11.sp,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+          }
         }
 
         IconButton(onClick = onClear) {
@@ -489,6 +553,7 @@ fun ParsedPackageCard(
           Text(
             text = archive.packageName,
             style = MaterialTheme.typography.labelSmall,
+            fontFamily = JetBrainsMono,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
           Text(
@@ -497,6 +562,136 @@ fun ParsedPackageCard(
             fontFamily = JetBrainsMono,
             color = TechPrimary
           )
+        }
+      }
+
+      Spacer(modifier = Modifier.height(12.dp))
+
+      // Expandable Install-Time Custom Metadata Editor
+      OutlinedButton(
+        onClick = { showMetadataEditor = !showMetadataEditor },
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag("toggle_install_metadata_editor"),
+        shape = RoundedCornerShape(12.dp)
+      ) {
+        Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp), tint = TechPrimary)
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+          text = if (showMetadataEditor) "カスタム変更パネルを閉じる" else "インストール時に名前・バンドル名・バージョン・ジャンルを変更",
+          fontSize = 11.sp,
+          fontWeight = FontWeight.Bold,
+          color = TechPrimary
+        )
+      }
+
+      AnimatedVisibility(visible = showMetadataEditor) {
+        Surface(
+          shape = RoundedCornerShape(14.dp),
+          color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+        ) {
+          Column(modifier = Modifier.padding(14.dp)) {
+            Text(
+              text = "インストール時メタデータ＆バンドル名変更",
+              fontSize = 12.sp,
+              fontWeight = FontWeight.Bold,
+              color = TechPrimary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+              value = editLabel,
+              onValueChange = { editLabel = it },
+              label = { Text("アプリ表示名", fontSize = 11.sp) },
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("install_edit_label_input"),
+              shape = RoundedCornerShape(10.dp),
+              singleLine = true
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+
+            OutlinedTextField(
+              value = editPackage,
+              onValueChange = { editPackage = it },
+              label = { Text("バンドル名 (Package Name)", fontSize = 11.sp) },
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("install_edit_package_input"),
+              shape = RoundedCornerShape(10.dp),
+              singleLine = true
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              OutlinedTextField(
+                value = editVersionName,
+                onValueChange = { editVersionName = it },
+                label = { Text("バージョン名", fontSize = 11.sp) },
+                modifier = Modifier
+                  .weight(1f)
+                  .testTag("install_edit_version_input"),
+                shape = RoundedCornerShape(10.dp),
+                singleLine = true
+              )
+              OutlinedTextField(
+                value = editVersionCode,
+                onValueChange = { editVersionCode = it.filter { ch -> ch.isDigit() } },
+                label = { Text("ビルド番号", fontSize = 11.sp) },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(0.8f),
+                shape = RoundedCornerShape(10.dp),
+                singleLine = true
+              )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("ジャンル・カテゴリ選択:", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(4.dp))
+
+            FlowRow(
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+              verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+              AppsManagerRepository.availableCategories.forEach { cat ->
+                FilterChip(
+                  selected = editCategory == cat,
+                  onClick = { editCategory = cat },
+                  label = { Text(cat, fontSize = 10.sp) },
+                  shape = RoundedCornerShape(6.dp),
+                  colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = TechPrimary.copy(alpha = 0.2f),
+                    selectedLabelColor = TechPrimary
+                  )
+                )
+              }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Button(
+              onClick = {
+                onUpdateOverrides(
+                  editLabel.trim(),
+                  editPackage.trim(),
+                  editVersionName.trim(),
+                  editVersionCode.toLongOrNull() ?: archive.versionCode,
+                  editCategory
+                )
+                showMetadataEditor = false
+              },
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("apply_install_metadata_button"),
+              shape = RoundedCornerShape(10.dp),
+              colors = ButtonDefaults.buttonColors(containerColor = TechPrimary)
+            ) {
+              Text("変更内容をインストール設定に反映", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+          }
         }
       }
 
@@ -664,25 +859,78 @@ fun ParsedPackageCard(
 
       Spacer(modifier = Modifier.height(20.dp))
 
-      Button(
-        onClick = onInstall,
-        enabled = installStatus != InstallStatus.INSTALLING,
-        modifier = Modifier
-          .fillMaxWidth()
-          .height(52.dp)
-          .testTag("execute_install_button"),
-        shape = RoundedCornerShape(14.dp),
-        colors = ButtonDefaults.buttonColors(
-          containerColor = if (useRootInstall) AccentRoot else TechPrimary
-        )
-      ) {
-        Icon(Icons.Default.Download, contentDescription = null)
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-          text = if (useRootInstall) "Rootサイレントインストール実行" else "インストール実行 (${archive.splits.size} APKセッション)",
-          fontSize = 14.sp,
-          fontWeight = FontWeight.Bold
-        )
+      // Post-install or Already Installed 3-button layout: 再インストール / 開く / 削除
+      if (installStatus == InstallStatus.SUCCESS || isAlreadyInstalled) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          Button(
+            onClick = onInstall,
+            enabled = installStatus != InstallStatus.INSTALLING,
+            modifier = Modifier
+              .weight(1.2f)
+              .height(48.dp)
+              .testTag("reinstall_button"),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+              containerColor = if (useRootInstall) AccentRoot else TechPrimary
+            )
+          ) {
+            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("再インストール", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+          }
+
+          Button(
+            onClick = onLaunch,
+            modifier = Modifier
+              .weight(1f)
+              .height(48.dp)
+              .testTag("open_installed_app_button"),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = AccentSuccess)
+          ) {
+            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("開く", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+          }
+
+          OutlinedButton(
+            onClick = onUninstall,
+            modifier = Modifier
+              .weight(0.9f)
+              .height(48.dp)
+              .testTag("delete_installed_app_button"),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentDanger)
+          ) {
+            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("削除", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+          }
+        }
+      } else {
+        Button(
+          onClick = onInstall,
+          enabled = installStatus != InstallStatus.INSTALLING,
+          modifier = Modifier
+            .fillMaxWidth()
+            .height(52.dp)
+            .testTag("execute_install_button"),
+          shape = RoundedCornerShape(14.dp),
+          colors = ButtonDefaults.buttonColors(
+            containerColor = if (useRootInstall) AccentRoot else TechPrimary
+          )
+        ) {
+          Icon(Icons.Default.Download, contentDescription = null)
+          Spacer(modifier = Modifier.width(8.dp))
+          Text(
+            text = if (useRootInstall) "Rootサイレントインストール実行" else "インストール実行 (${archive.splits.size} APKセッション)",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold
+          )
+        }
       }
     }
   }
@@ -691,7 +939,10 @@ fun ParsedPackageCard(
 @Composable
 fun InstallProgressCard(
   state: com.example.model.InstallSessionState,
-  onRetry: () -> Unit
+  onRetry: () -> Unit,
+  onReinstall: () -> Unit,
+  onOpenApp: () -> Unit,
+  onDeleteApp: () -> Unit
 ) {
   Card(
     modifier = Modifier
@@ -735,6 +986,47 @@ fun InstallProgressCard(
             .height(6.dp)
             .clip(RoundedCornerShape(3.dp))
         )
+      }
+
+      if (state.status == InstallStatus.SUCCESS) {
+        Spacer(modifier = Modifier.height(12.dp))
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          Button(
+            onClick = onReinstall,
+            modifier = Modifier.weight(1.2f),
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = TechPrimary)
+          ) {
+            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("再インストール", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+          }
+
+          Button(
+            onClick = onOpenApp,
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = AccentSuccess)
+          ) {
+            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(15.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("開く", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+          }
+
+          OutlinedButton(
+            onClick = onDeleteApp,
+            modifier = Modifier.weight(0.9f),
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentDanger)
+          ) {
+            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(15.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("削除", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+          }
+        }
       }
 
       if (state.errorDetails != null) {

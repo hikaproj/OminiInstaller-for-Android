@@ -22,7 +22,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CleaningServices
-import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Restore
@@ -83,7 +82,7 @@ fun ToolsOptimizerScreen(
     item {
       AppHeader(
         title = "最適化・復元センター",
-        subtitle = "24種類のバックアップ書き出し形式・Root適応最適化・開発者: Hikaproj",
+        subtitle = "標準アーカイブ書き出し・Root適応最適化・リストア管理",
         isRooted = optState.isRooted,
         trailingContent = {
           IconButton(onClick = {
@@ -165,9 +164,9 @@ fun ToolsOptimizerScreen(
           Spacer(modifier = Modifier.height(12.dp))
           Text(
             text = if (optState.isRooted) {
-              "特権機能がアンロックされています: サイレントインストール・削除、ART/DEX Speed事前コンパイル、システム全体のキャッシュトリムが利用可能です。"
+              "特権機能がアンロックされています: サイレントインストール・削除、権限の即時付与/剥奪、ART/DEX Speed事前コンパイル、システム全体のキャッシュトリムが利用可能です。"
             } else {
-              "標準環境に最適化されています: OS標準の確認ダイアログ付きPackageInstallerセッション、内部キャッシュの高速整理、24形式の安全なバックアップ/リストアを実行できます。"
+              "標準環境に最適化されています: OS標準の確認ダイアログ付きPackageInstallerセッション、内部キャッシュの高速整理、標準アーカイブ形式によるバックアップ/リストアを実行できます。"
             },
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
@@ -176,7 +175,7 @@ fun ToolsOptimizerScreen(
       }
     }
 
-    // 24+ Backup Export Format Selector Card
+    // Backup Export Format Selector Card
     item {
       Card(
         modifier = Modifier
@@ -284,46 +283,6 @@ fun ToolsOptimizerScreen(
             } else {
               Text("クリーンアップ", fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
-          }
-        }
-      }
-    }
-
-    // Developer Info Card (Hikaproj)
-    item {
-      Card(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 20.dp, vertical = 6.dp),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-      ) {
-        Row(
-          modifier = Modifier.padding(16.dp),
-          verticalAlignment = Alignment.CenterVertically
-        ) {
-          Box(
-            modifier = Modifier
-              .size(40.dp)
-              .clip(CircleShape)
-              .background(TechPrimary.copy(alpha = 0.15f)),
-            contentAlignment = Alignment.Center
-          ) {
-            Icon(Icons.Default.Code, contentDescription = null, tint = TechPrimary)
-          }
-          Spacer(modifier = Modifier.width(12.dp))
-          Column {
-            Text(
-              text = "OmniInstaller — 開発者: Hikaproj",
-              style = MaterialTheme.typography.titleSmall,
-              fontWeight = FontWeight.Bold
-            )
-            Text(
-              text = "ビルドパッケージ名: hikaproj-ominiinstaller-v1.0.apk • URIスキーム: hpjominii://",
-              fontSize = 11.sp,
-              fontFamily = JetBrainsMono,
-              color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
           }
         }
       }

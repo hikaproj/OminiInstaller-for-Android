@@ -104,8 +104,8 @@ object BackupManager {
       }
 
       when {
-        // 1. Direct Single APK or .bin
-        (exportFormat == BackupExportFormat.APK || exportFormat == BackupExportFormat.BIN) && splitDirs.isEmpty() -> {
+        // 1. Direct Single APK
+        exportFormat == BackupExportFormat.APK && splitDirs.isEmpty() -> {
           sourceApk.copyTo(targetFile, overwrite = true)
         }
         // 2. Single GZIP (.apk.gz)

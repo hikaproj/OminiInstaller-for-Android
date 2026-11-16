@@ -3,6 +3,7 @@ package com.example.ui.screens
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +24,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
@@ -31,7 +33,9 @@ import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.Button
@@ -51,21 +55,30 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.BackupExportFormat
 import com.example.model.InstalledAppItem
+import com.example.optimizer.AppsManagerRepository
 import com.example.ui.AppsFilter
 import com.example.ui.MainViewModel
 import com.example.ui.components.AppHeader
@@ -100,7 +113,9 @@ fun AppsManagerScreen(
     }
     val matchSearch = searchQuery.isBlank() ||
       app.appLabel.contains(searchQuery, ignoreCase = true) ||
-      app.packageName.contains(searchQuery, ignoreCase = true)
+      app.packageName.contains(searchQuery, ignoreCase = true) ||
+      app.customPackageName.contains(searchQuery, ignoreCase = true) ||
+      app.category.contains(searchQuery, ignoreCase = true)
     matchFilter && matchSearch
   }
 
@@ -114,7 +129,7 @@ fun AppsManagerScreen(
     ) {
       AppHeader(
         title = "アプリ一括・権限管理",
-        subtitle = "分割APK解析、権限監査、24形式対応バックアップ＆一括削除",
+        subtitle = "アイコン表示、メタ情報・バンドル名変更、権限編集＆バックアップ抽出",
         isRooted = optState.isRooted,
         trailingContent = {
           IconButton(onClick = { viewModel.refreshInstalledApps() }) {
@@ -130,7 +145,7 @@ fun AppsManagerScreen(
         modifier = Modifier
           .fillMaxWidth()
           .padding(horizontal = 20.dp, vertical = 4.dp),
-        placeholder = { Text("アプリ名、パッケージ名でフィルタ...") },
+        placeholder = { Text("アプリ名、バンドル名、ジャンルで検索...") },
         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
         shape = RoundedCornerShape(14.dp),
         singleLine = true
@@ -156,7 +171,7 @@ fun AppsManagerScreen(
         }
       }
 
-      // Quick Backup Export Format Row (24 formats)
+      // Quick Backup Export Format Row
       LazyRow(
         modifier = Modifier
           .fillMaxWidth()
@@ -231,7 +246,7 @@ fun AppsManagerScreen(
           Column(horizontalAlignment = Alignment.CenterHorizontally) {
             CircularProgressIndicator(strokeWidth = 3.dp)
             Spacer(modifier = Modifier.height(12.dp))
-            Text("インストール済みアプリと権限を解析中...")
+            Text("インストール済みアプリ・アイコン・権限を解析中...")
           }
         }
       } else {
@@ -318,7 +333,7 @@ fun AppsManagerScreen(
       }
     }
 
-    // Deep App Details & Permission Inspector Modal
+    // Deep App Details, Metadata Editor & Permission Editor Modal
     inspectingApp?.let { app ->
       AppDetailsBottomSheet(
         app = app,
@@ -326,6 +341,9 @@ fun AppsManagerScreen(
         selectedFormat = selectedBackupFormat,
         onSelectFormat = { viewModel.setBackupExportFormat(it) },
         onDismiss = { viewModel.inspectApp(null) },
+        onLaunchApp = {
+          viewModel.launchInstalledApp(app.packageName)
+        },
         onBackupSingle = { fmt ->
           viewModel.backupSingleApp(app.packageName, format = fmt)
           viewModel.inspectApp(null)
@@ -339,6 +357,30 @@ fun AppsManagerScreen(
         },
         onOpenSettings = {
           viewModel.openAppSettings(app.packageName)
+        },
+        onSaveMetadata = { newLabel, newPkg, newVerName, newVerCode, newCat ->
+          viewModel.saveExistingAppMetadata(
+            originalPackageName = app.packageName,
+            customLabel = newLabel,
+            customPackageName = newPkg,
+            customVersionName = newVerName,
+            customVersionCode = newVerCode,
+            customCategory = newCat
+          )
+        },
+        onReinstallWithMetadata = { newLabel, newPkg, newVerName, newVerCode, newCat ->
+          viewModel.reinstallAppWithModifiedMetadata(
+            app = app,
+            newLabel = newLabel,
+            newPackageName = newPkg,
+            newVersionName = newVerName,
+            newVersionCode = newVerCode,
+            newCategory = newCat
+          )
+          viewModel.inspectApp(null)
+        },
+        onTogglePermission = { permFullName, grant ->
+          viewModel.toggleAppPermission(app.packageName, permFullName, grant)
         }
       )
     }
@@ -373,22 +415,32 @@ fun InstalledAppCard(
 
       Spacer(modifier = Modifier.width(8.dp))
 
-      Box(
-        modifier = Modifier
-          .size(44.dp)
-          .clip(RoundedCornerShape(10.dp))
-          .background(
-            if (app.isSystemApp) MaterialTheme.colorScheme.surfaceVariant
-            else TechPrimary.copy(alpha = 0.15f)
-          ),
-        contentAlignment = Alignment.Center
-      ) {
-        Icon(
-          imageVector = Icons.Default.Android,
-          contentDescription = null,
-          tint = if (app.isSystemApp) MaterialTheme.colorScheme.onSurfaceVariant else TechPrimary,
-          modifier = Modifier.size(26.dp)
+      if (app.iconBitmap != null) {
+        Image(
+          bitmap = app.iconBitmap.asImageBitmap(),
+          contentDescription = app.appLabel,
+          modifier = Modifier
+            .size(44.dp)
+            .clip(RoundedCornerShape(10.dp))
         )
+      } else {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+              if (app.isSystemApp) MaterialTheme.colorScheme.surfaceVariant
+              else TechPrimary.copy(alpha = 0.15f)
+            ),
+          contentAlignment = Alignment.Center
+        ) {
+          Icon(
+            imageVector = Icons.Default.Android,
+            contentDescription = null,
+            tint = if (app.isSystemApp) MaterialTheme.colorScheme.onSurfaceVariant else TechPrimary,
+            modifier = Modifier.size(26.dp)
+          )
+        }
       }
 
       Spacer(modifier = Modifier.width(12.dp))
@@ -399,10 +451,23 @@ fun InstalledAppCard(
             text = app.appLabel,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
-            maxLines = 1
+            maxLines = 1,
+            modifier = Modifier.weight(1f, fill = false)
           )
+          Spacer(modifier = Modifier.width(6.dp))
+          Surface(
+            shape = RoundedCornerShape(4.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant
+          ) {
+            Text(
+              text = app.category,
+              fontSize = 9.sp,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+            )
+          }
           if (app.isSplitApk) {
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(4.dp))
             Surface(
               shape = RoundedCornerShape(4.dp),
               color = TechPrimary.copy(alpha = 0.15f)
@@ -418,8 +483,14 @@ fun InstalledAppCard(
           }
         }
 
+        val displayPkg = if (app.customPackageName != app.packageName) {
+          "${app.customPackageName} (${app.packageName})"
+        } else {
+          app.packageName
+        }
+
         Text(
-          text = app.packageName,
+          text = displayPkg,
           fontSize = 11.sp,
           fontFamily = JetBrainsMono,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -458,13 +529,23 @@ fun AppDetailsBottomSheet(
   selectedFormat: BackupExportFormat,
   onSelectFormat: (BackupExportFormat) -> Unit,
   onDismiss: () -> Unit,
+  onLaunchApp: () -> Unit,
   onBackupSingle: (BackupExportFormat) -> Unit,
   onUninstallSingle: () -> Unit,
   onOptimizeArt: () -> Unit,
-  onOpenSettings: () -> Unit
+  onOpenSettings: () -> Unit,
+  onSaveMetadata: (String, String, String, Long, String) -> Unit,
+  onReinstallWithMetadata: (String, String, String, Long, String) -> Unit,
+  onTogglePermission: (String, Boolean) -> Unit
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   val allFormats = remember { BackupExportFormat.values().toList() }
+
+  var editLabel by remember(app.packageName, app.appLabel) { mutableStateOf(app.appLabel) }
+  var editBundleName by remember(app.packageName, app.customPackageName) { mutableStateOf(app.customPackageName) }
+  var editVersionName by remember(app.packageName, app.versionName) { mutableStateOf(app.versionName) }
+  var editVersionCode by remember(app.packageName, app.versionCode) { mutableStateOf(app.versionCode.toString()) }
+  var editCategory by remember(app.packageName, app.category) { mutableStateOf(app.category) }
 
   ModalBottomSheet(
     onDismissRequest = onDismiss,
@@ -483,17 +564,40 @@ fun AppDetailsBottomSheet(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
       ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = app.appLabel,
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold
-          )
-          Text(
-            text = app.packageName,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-          )
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+          if (app.iconBitmap != null) {
+            Image(
+              bitmap = app.iconBitmap.asImageBitmap(),
+              contentDescription = app.appLabel,
+              modifier = Modifier
+                .size(52.dp)
+                .clip(RoundedCornerShape(12.dp))
+            )
+          } else {
+            Box(
+              modifier = Modifier
+                .size(52.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(TechPrimary.copy(alpha = 0.15f)),
+              contentAlignment = Alignment.Center
+            ) {
+              Icon(Icons.Default.Android, contentDescription = null, tint = TechPrimary, modifier = Modifier.size(30.dp))
+            }
+          }
+          Spacer(modifier = Modifier.width(12.dp))
+          Column {
+            Text(
+              text = app.appLabel,
+              style = MaterialTheme.typography.headlineSmall,
+              fontWeight = FontWeight.Bold
+            )
+            Text(
+              text = app.customPackageName,
+              style = MaterialTheme.typography.labelSmall,
+              fontFamily = JetBrainsMono,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
         }
         IconButton(onClick = onDismiss) {
           Icon(Icons.Default.Close, contentDescription = "閉じる")
@@ -502,9 +606,58 @@ fun AppDetailsBottomSheet(
 
       Spacer(modifier = Modifier.height(12.dp))
 
+      // Primary Action Buttons: 再インストール / 開く / 削除 + バックアップ抽出
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        Button(
+          onClick = {
+            onReinstallWithMetadata(
+              editLabel.trim(),
+              editBundleName.trim(),
+              editVersionName.trim(),
+              editVersionCode.toLongOrNull() ?: app.versionCode,
+              editCategory
+            )
+          },
+          modifier = Modifier.weight(1.2f),
+          shape = RoundedCornerShape(12.dp),
+          colors = ButtonDefaults.buttonColors(containerColor = TechPrimary)
+        ) {
+          Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("再インストール", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+
+        Button(
+          onClick = onLaunchApp,
+          modifier = Modifier.weight(1f),
+          shape = RoundedCornerShape(12.dp),
+          colors = ButtonDefaults.buttonColors(containerColor = AccentSuccess)
+        ) {
+          Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("開く", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+
+        OutlinedButton(
+          onClick = onUninstallSingle,
+          modifier = Modifier.weight(0.9f),
+          shape = RoundedCornerShape(12.dp),
+          colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentDanger)
+        ) {
+          Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("削除", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+      }
+
+      Spacer(modifier = Modifier.height(10.dp))
+
       // Export Format Picker inside Sheet
       Text(
-        text = "バックアップ書き出し形式を選択 (24形式):",
+        text = "バックアップ書き出し形式を選択:",
         fontSize = 12.sp,
         fontWeight = FontWeight.Bold
       )
@@ -527,14 +680,13 @@ fun AppDetailsBottomSheet(
         }
       }
 
-      Spacer(modifier = Modifier.height(12.dp))
+      Spacer(modifier = Modifier.height(8.dp))
 
-      // Action buttons row
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
       ) {
-        Button(
+        OutlinedButton(
           onClick = { onBackupSingle(selectedFormat) },
           modifier = Modifier.weight(1.3f),
           shape = RoundedCornerShape(12.dp)
@@ -552,17 +704,6 @@ fun AppDetailsBottomSheet(
           Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
           Spacer(modifier = Modifier.width(6.dp))
           Text("OS設定", fontSize = 12.sp)
-        }
-
-        OutlinedButton(
-          onClick = onUninstallSingle,
-          modifier = Modifier.weight(0.9f),
-          shape = RoundedCornerShape(12.dp),
-          colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentDanger)
-        ) {
-          Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-          Spacer(modifier = Modifier.width(4.dp))
-          Text("削除", fontSize = 12.sp)
         }
       }
 
@@ -582,6 +723,140 @@ fun AppDetailsBottomSheet(
 
       Spacer(modifier = Modifier.height(20.dp))
 
+      // Metadata & Bundle Name Editor Card
+      Text(
+        text = "アプリ情報・バンドル名・バージョン・ジャンル変更",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold
+      )
+      Spacer(modifier = Modifier.height(8.dp))
+
+      Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        modifier = Modifier.fillMaxWidth()
+      ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+          OutlinedTextField(
+            value = editLabel,
+            onValueChange = { editLabel = it },
+            label = { Text("アプリ名", fontSize = 11.sp) },
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("existing_app_label_input"),
+            shape = RoundedCornerShape(10.dp),
+            singleLine = true
+          )
+          Spacer(modifier = Modifier.height(6.dp))
+
+          OutlinedTextField(
+            value = editBundleName,
+            onValueChange = { editBundleName = it },
+            label = { Text("バンドル名 (Package Name)", fontSize = 11.sp) },
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("existing_app_bundle_input"),
+            shape = RoundedCornerShape(10.dp),
+            singleLine = true
+          )
+          Spacer(modifier = Modifier.height(6.dp))
+
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+              value = editVersionName,
+              onValueChange = { editVersionName = it },
+              label = { Text("バージョン", fontSize = 11.sp) },
+              modifier = Modifier
+                .weight(1f)
+                .testTag("existing_app_version_input"),
+              shape = RoundedCornerShape(10.dp),
+              singleLine = true
+            )
+            OutlinedTextField(
+              value = editVersionCode,
+              onValueChange = { editVersionCode = it.filter { ch -> ch.isDigit() } },
+              label = { Text("ビルド番号", fontSize = 11.sp) },
+              keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+              modifier = Modifier.weight(0.8f),
+              shape = RoundedCornerShape(10.dp),
+              singleLine = true
+            )
+          }
+
+          Spacer(modifier = Modifier.height(8.dp))
+          Text("ジャンル選択:", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+          Spacer(modifier = Modifier.height(4.dp))
+
+          FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+          ) {
+            AppsManagerRepository.availableCategories.forEach { cat ->
+              FilterChip(
+                selected = editCategory == cat,
+                onClick = { editCategory = cat },
+                label = { Text(cat, fontSize = 10.sp) },
+                shape = RoundedCornerShape(6.dp),
+                colors = FilterChipDefaults.filterChipColors(
+                  selectedContainerColor = TechPrimary.copy(alpha = 0.2f),
+                  selectedLabelColor = TechPrimary
+                )
+              )
+            }
+          }
+
+          Spacer(modifier = Modifier.height(10.dp))
+
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            Button(
+              onClick = {
+                onSaveMetadata(
+                  editLabel.trim(),
+                  editBundleName.trim(),
+                  editVersionName.trim(),
+                  editVersionCode.toLongOrNull() ?: app.versionCode,
+                  editCategory
+                )
+              },
+              modifier = Modifier
+                .weight(1f)
+                .testTag("save_app_metadata_button"),
+              shape = RoundedCornerShape(10.dp),
+              colors = ButtonDefaults.buttonColors(containerColor = TechPrimary)
+            ) {
+              Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(15.dp))
+              Spacer(modifier = Modifier.width(4.dp))
+              Text("変更を保存", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+
+            OutlinedButton(
+              onClick = {
+                onReinstallWithMetadata(
+                  editLabel.trim(),
+                  editBundleName.trim(),
+                  editVersionName.trim(),
+                  editVersionCode.toLongOrNull() ?: app.versionCode,
+                  editCategory
+                )
+              },
+              modifier = Modifier
+                .weight(1.2f)
+                .testTag("reinstall_modified_apk_button"),
+              shape = RoundedCornerShape(10.dp)
+            ) {
+              Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(15.dp))
+              Spacer(modifier = Modifier.width(4.dp))
+              Text("APK書き換え再導入", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+          }
+        }
+      }
+
+      Spacer(modifier = Modifier.height(20.dp))
+
       // Specs
       Text(
         text = "パッケージ情報",
@@ -596,6 +871,7 @@ fun AppDetailsBottomSheet(
         modifier = Modifier.fillMaxWidth()
       ) {
         Column(modifier = Modifier.padding(14.dp)) {
+          Text("実パッケージID: ${app.packageName}", fontSize = 12.sp, fontFamily = JetBrainsMono)
           Text("バージョン: ${app.versionName} (コード: ${app.versionCode})", fontSize = 12.sp, fontFamily = JetBrainsMono)
           Text("Target SDK: API ${app.targetSdk} (Min: API ${app.minSdk})", fontSize = 12.sp, fontFamily = JetBrainsMono)
           Text("APK格納パス: ${app.sourceDir}", fontSize = 11.sp, fontFamily = JetBrainsMono, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -611,11 +887,16 @@ fun AppDetailsBottomSheet(
 
       Spacer(modifier = Modifier.height(20.dp))
 
-      // Permissions Audit
+      // Permissions Audit & Interactive Permission Editor
       Text(
-        text = "権限監査 (${app.permissions.size} 個の要求権限)",
+        text = "権限編集・監査 (${app.permissions.size} 個の要求権限)",
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold
+      )
+      Text(
+        text = "スイッチを切り替えて各権限の許可(Grant) / 拒否(Revoke)を直接変更できます。",
+        fontSize = 11.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
       )
       Spacer(modifier = Modifier.height(8.dp))
 
@@ -643,29 +924,35 @@ fun AppDetailsBottomSheet(
                 Row(
                   modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 2.dp),
+                    .padding(vertical = 3.dp),
                   horizontalArrangement = Arrangement.SpaceBetween,
                   verticalAlignment = Alignment.CenterVertically
                 ) {
-                  Text(
-                    text = perm.name,
-                    fontSize = 11.sp,
-                    fontFamily = JetBrainsMono,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                  )
-
-                  Surface(
-                    shape = RoundedCornerShape(4.dp),
-                    color = if (perm.isGranted) AccentSuccess.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface
-                  ) {
+                  Column(modifier = Modifier.weight(1f)) {
                     Text(
-                      text = if (perm.isGranted) "許可済 (Granted)" else "未許可",
-                      fontSize = 10.sp,
+                      text = perm.name,
+                      fontSize = 11.sp,
+                      fontFamily = JetBrainsMono,
                       fontWeight = FontWeight.Bold,
-                      color = if (perm.isGranted) AccentSuccess else MaterialTheme.colorScheme.onSurfaceVariant,
-                      modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                      color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                      text = if (perm.isGranted) "許可済 (Granted)" else "拒否 / 未許可 (Revoked)",
+                      fontSize = 10.sp,
+                      color = if (perm.isGranted) AccentSuccess else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                   }
+
+                  Switch(
+                    checked = perm.isGranted,
+                    onCheckedChange = { newState ->
+                      onTogglePermission(perm.fullName, newState)
+                    },
+                    colors = SwitchDefaults.colors(
+                      checkedThumbColor = Color.White,
+                      checkedTrackColor = AccentSuccess
+                    )
+                  )
                 }
               }
             }

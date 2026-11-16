@@ -80,6 +80,19 @@ object PackageInstallerManager {
         isRootInstall = useRoot
       )
 
+      // Save custom metadata overrides (bundle name, app label, version, category) so they persist
+      com.example.optimizer.AppsManagerRepository.saveMetadataOverride(
+        context,
+        com.example.model.AppMetadataOverride(
+          originalPackageName = archiveInfo.originalPackageName.ifBlank { archiveInfo.packageName },
+          customAppLabel = archiveInfo.appLabel,
+          customPackageName = archiveInfo.packageName,
+          customVersionName = archiveInfo.versionName,
+          customVersionCode = archiveInfo.versionCode,
+          customCategory = archiveInfo.category
+        )
+      )
+
       // 1. Process OBB files if any
       if (archiveInfo.obbEntries.isNotEmpty()) {
         _sessionState.value = _sessionState.value.copy(
@@ -151,8 +164,23 @@ object PackageInstallerManager {
       val usedEntryNames = mutableSetOf<String>()
 
       val sourceFileOrDir = File(archiveInfo.filePath)
+      val isMetadataOverridden = archiveInfo.packageName != archiveInfo.originalPackageName
       if (sourceFileOrDir.isFile) {
-        filesToInstall.add(FileToWrite(sourceFileOrDir, "base.apk"))
+        val fileToUse = if (isMetadataOverridden) {
+          com.example.optimizer.AppsManagerRepository.createModifiedApkFile(
+            context = context,
+            sourceApkPath = sourceFileOrDir.absolutePath,
+            originalPackageName = archiveInfo.originalPackageName,
+            newPackageName = archiveInfo.packageName,
+            originalLabel = "",
+            newLabel = archiveInfo.appLabel,
+            originalVersionName = "",
+            newVersionName = archiveInfo.versionName
+          )
+        } else {
+          sourceFileOrDir
+        }
+        filesToInstall.add(FileToWrite(fileToUse, "base.apk"))
       } else if (sourceFileOrDir.isDirectory) {
         for ((idx, split) in archiveInfo.splits.withIndex()) {
           val f = if (split.filePath.isNotBlank() && File(split.filePath).exists()) {
@@ -194,9 +222,8 @@ object PackageInstallerManager {
 
       val packageInstaller = context.packageManager.packageInstaller
       val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
-        // Do NOT force setAppPackageName if it could mismatch a split or inner base package name;
-        // only set when verified valid package identifier
         if (
+          !isMetadataOverridden &&
           archiveInfo.packageName.isNotBlank() &&
           archiveInfo.packageName.contains(".") &&
           !archiveInfo.packageName.startsWith("unknown") &&

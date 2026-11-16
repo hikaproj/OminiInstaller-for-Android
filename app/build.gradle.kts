@@ -12,12 +12,19 @@ android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
+  val ciVersionName = project.findProperty("APP_VERSION_NAME")?.toString()
+    ?: System.getenv("APP_VERSION_NAME")
+    ?: "1.0.0"
+  val ciVersionCode = (project.findProperty("APP_VERSION_CODE")?.toString()
+    ?: System.getenv("APP_VERSION_CODE"))?.toIntOrNull()
+    ?: 1
+
   defaultConfig {
-    applicationId = "com.aistudio.omniinstaller.nxqk"
+    applicationId = "com.hikaproj.app.android.ominiinstaller"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = ciVersionCode
+    versionName = ciVersionName
     base.archivesName.set("hikaproj-ominiinstaller-v${versionName}")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

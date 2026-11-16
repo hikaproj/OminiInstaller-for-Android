@@ -33,145 +33,54 @@ object StoreRepository {
     .build()
 
   private val supportedAssetExtensions = listOf(
-    ".apk", ".xapk", ".apks", ".apkm", ".omni", ".hpjpkg",
-    ".zapk", ".sapk", ".mapk", ".bapk", ".apk+", ".apex",
-    ".tar.gz", ".tgz", ".apk.gz", ".tar", ".zip"
+    ".apk", ".xapk", ".apks", ".apkm", ".aab", ".apex",
+    ".tar.gz", ".tgz", ".apk.gz", ".tar", ".jar", ".ab", ".zip"
   )
 
   val defaultRepositories = listOf(
     StoreRepositorySource(
-      id = "hikaproj_official",
-      name = "Hikaproj Official Curated Index",
-      url = "https://github.com/hikaproj/omniinstaller-index",
-      description = "Hikaproj 公式厳選オープンソースアプリカタログ (大規模マルチカテゴリ対応)",
-      appCount = 12,
+      id = "default_curated",
+      name = "Default Curated Index",
+      url = "https://github.com",
+      description = "初期収録オープンソースアプリ (Termux / LocalSend)",
+      appCount = 2,
       lastSynced = "初期組込済",
-      isOfficial = true
-    ),
-    StoreRepositorySource(
-      id = "github_direct",
-      name = "GitHub Releases Bridge",
-      url = "https://api.github.com",
-      description = "GitHub 上の任意のリポジトリから最新 APK / XAPK / APKS を直接取得",
-      appCount = 0,
-      lastSynced = "オンライン",
       isOfficial = true
     )
   )
 
-  // Rich curated open-source apps with full metadata & version history
+  // Only LocalSend and Termux as requested
   val defaultCuratedApps = listOf(
     StoreAppItem(
-      id = "newpipe",
-      name = "NewPipe",
-      packageName = "org.schabi.newpipe",
-      summary = "軽量・広告なし・バックグラウンド再生対応のYouTube/メディアクライアント",
-      description = "NewPipe は Google Play 開発者サービスや YouTube API に依存せず、ウェブサイトを直接解析して動作するプライバシー重視の軽量メディアストリーミングフロントエンドです。\n\n• バックグラウンド再生およびピクチャ・イン・ピクチャ (PiP) 対応\n• 動画・音声・字幕のローカルダウンロード機能\n• SoundCloud、PeerTube、Bandcamp、media.ccc.de などの複数サービスに対応\n• サブスクリプションのローカル管理とインポート/エクスポート",
-      category = "メディア",
-      author = "TeamNewPipe",
-      iconUrl = "https://raw.githubusercontent.com/TeamNewPipe/NewPipe/dev/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
-      githubRepo = "TeamNewPipe/NewPipe",
-      websiteUrl = "https://newpipe.net",
-      sourceRepoName = "Hikaproj Official Curated Index",
-      license = "GPL-3.0",
+      id = "localsend",
+      name = "LocalSend",
+      packageName = "org.localsend.localsend_app",
+      summary = "インターネット不要でローカルLAN内のPC・スマホ間ファイル高速共有",
+      description = "LocalSend は AirDrop のオープンソース・クロスプラットフォーム代替ツールです。外部サーバーを経由せず、Wi-Fi ネットワーク内で暗号化通信を用いて Android, Windows, macOS, Linux, iOS 間でファイルを直接送受信します。\n\n• REST API と HTTPS 証明書によるセキュアな P2P 転送\n• 複数ファイル・フォルダ・テキストの一括送信に対応\n• アカウント登録や外部クラウド不要",
+      category = "ネットワーク",
+      author = "localsend",
+      iconUrl = "https://raw.githubusercontent.com/localsend/localsend/main/app/assets/img/logo-512.png",
+      githubRepo = "localsend/localsend",
+      websiteUrl = "https://localsend.org",
+      sourceRepoName = "Default Curated Index",
+      license = "MIT",
       minSdk = 21,
-      architecture = "Universal (arm64-v8a / armeabi-v7a / x86_64)",
-      latestVersion = "v0.27.2",
-      downloadUrl = "https://github.com/TeamNewPipe/NewPipe/releases/download/v0.27.2/NewPipe_v0.27.2.apk",
-      sizeBytes = 11_500_000L,
-      releaseNotes = "最新のストリーミング復号化修正、プレイヤーUI改善、およびパフォーマンス最適化。",
-      releaseDate = "2024-10-15",
+      architecture = "arm64-v8a / Universal",
+      latestVersion = "v1.15.4",
+      downloadUrl = "https://github.com/localsend/localsend/releases/download/v1.15.4/LocalSend-1.15.4-android-arm64v8.apk",
+      sizeBytes = 21_500_000L,
+      releaseNotes = "フォルダ一括転送の高速化とWeb共有モードの改善。",
+      releaseDate = "2024-08-29",
       versions = listOf(
         StoreReleaseVersion(
-          versionName = "v0.27.2",
-          downloadUrl = "https://github.com/TeamNewPipe/NewPipe/releases/download/v0.27.2/NewPipe_v0.27.2.apk",
-          sizeBytes = 11_500_000L,
-          releaseDate = "2024-10-15",
-          changelog = "最新のストリーミング復号化修正と安定性向上",
-          abi = "Universal"
-        ),
-        StoreReleaseVersion(
-          versionName = "v0.27.1",
-          downloadUrl = "https://github.com/TeamNewPipe/NewPipe/releases/download/v0.27.1/NewPipe_v0.27.1.apk",
-          sizeBytes = 11_400_000L,
-          releaseDate = "2024-07-24",
-          changelog = "YouTube ストリーム抽出エラーの緊急修正",
-          abi = "Universal"
+          versionName = "v1.15.4 (arm64-v8a)",
+          downloadUrl = "https://github.com/localsend/localsend/releases/download/v1.15.4/LocalSend-1.15.4-android-arm64v8.apk",
+          sizeBytes = 21_500_000L,
+          releaseDate = "2024-08-29",
+          changelog = "フォルダ一括転送の高速化とWeb共有モードの改善",
+          abi = "arm64-v8a"
         )
       )
-    ),
-    StoreAppItem(
-      id = "revanced_mgr",
-      name = "ReVanced Manager",
-      packageName = "app.revanced.manager.flutter",
-      summary = "各種Androidアプリに自由なパッチを適用できるオープンソースマネージャー",
-      description = "ReVanced Manager は Android アプリケーションに対してモジュラー形式のパッチを適用し、広告ブロック、テーマ変更、カスタム機能追加などを行える公式パッチャーです。\n\n• Root 環境（マウント方式）および非 Root 環境（再署名 APK 生成方式）の両対応\n• 外部パッチソースのカスタム追加機能\n• パッチ適用済み APK のエクスポートと直接インストール連携",
-      category = "ユーティリティ",
-      author = "ReVanced",
-      iconUrl = "https://raw.githubusercontent.com/ReVanced/revanced-manager/main/assets/branding/icon.png",
-      githubRepo = "ReVanced/revanced-manager",
-      websiteUrl = "https://revanced.app",
-      sourceRepoName = "Hikaproj Official Curated Index",
-      license = "GPL-3.0",
-      minSdk = 26,
-      architecture = "Universal",
-      latestVersion = "v1.21.1",
-      downloadUrl = "https://github.com/ReVanced/revanced-manager/releases/download/v1.21.1/revanced-manager-v1.21.1.apk",
-      sizeBytes = 36_000_000L,
-      releaseNotes = "パッチ統合UIの改良とルート/非ルート環境への適応強化。",
-      releaseDate = "2024-09-28",
-      versions = listOf(
-        StoreReleaseVersion(
-          versionName = "v1.21.1",
-          downloadUrl = "https://github.com/ReVanced/revanced-manager/releases/download/v1.21.1/revanced-manager-v1.21.1.apk",
-          sizeBytes = 36_000_000L,
-          releaseDate = "2024-09-28",
-          changelog = "パッチ選択画面の高速化とメモリ使用量削減",
-          abi = "Universal"
-        )
-      )
-    ),
-    StoreAppItem(
-      id = "mihon",
-      name = "Mihon",
-      packageName = "eu.kanade.tachiyomi",
-      summary = "高機能なオンライン/ローカル漫画リーダー (Tachiyomi後継)",
-      description = "Mihon はオープンソースのコミック・漫画リーダーであり、ローカルアーカイブ (CBZ, ZIP, EPUB, PDF) や外部拡張リポジトリからの閲覧に対応しています。\n\n• 見開き表示、縦スクロール（Webtoon）、右から左/左から右など多彩なビューア設定\n• MyAnimeList、AniList、Kitsu、Shikimori、MangaUpdates とのトラッキング連携\n• 自動バックアップと柔軟なカテゴリ・タグ管理",
-      category = "コミック・読書",
-      author = "mihonapp",
-      iconUrl = "https://raw.githubusercontent.com/mihonapp/mihon/main/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
-      githubRepo = "mihonapp/mihon",
-      websiteUrl = "https://mihon.app",
-      sourceRepoName = "Hikaproj Official Curated Index",
-      license = "Apache-2.0",
-      minSdk = 26,
-      architecture = "arm64-v8a / armeabi-v7a / x86_64 / Universal",
-      latestVersion = "v0.16.5",
-      downloadUrl = "https://github.com/mihonapp/mihon/releases/download/v0.16.5/mihon-v0.16.5.apk",
-      sizeBytes = 28_000_000L,
-      releaseNotes = "バックアップ復元の強化およびリーダーのレンダリング向上。",
-      releaseDate = "2024-08-10"
-    ),
-    StoreAppItem(
-      id = "seal",
-      name = "Seal Downloader",
-      packageName = "com.junkfood.seal",
-      summary = "yt-dlpベースのモダンな動画・音声ダウンローダー",
-      description = "Seal は強力なコマンドラインツール yt-dlp と FFmpeg を内蔵した、Material Design 3 準拠の動画・音声ダウンローダーです。\n\n• 1000以上の動画・音楽サイトからの高画質ダウンロード\n• 音声抽出 (MP3, M4A, Opus) とメタデータ・サムネイル自動埋め込み\n• プレイリスト一括ダウンロードおよびカスタム yt-dlp コマンドテンプレート実行",
-      category = "ツール",
-      author = "JunkFood02",
-      iconUrl = "https://raw.githubusercontent.com/JunkFood02/Seal/main/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
-      githubRepo = "JunkFood02/Seal",
-      websiteUrl = "https://github.com/JunkFood02/Seal",
-      sourceRepoName = "Hikaproj Official Curated Index",
-      license = "GPL-3.0",
-      minSdk = 24,
-      architecture = "arm64-v8a / armeabi-v7a / x86_64",
-      latestVersion = "v1.12.4",
-      downloadUrl = "https://github.com/JunkFood02/Seal/releases/download/v1.12.4/Seal-1.12.4-arm64-v8a-release.apk",
-      sizeBytes = 39_000_000L,
-      releaseNotes = "yt-dlpバイナリ更新、プレイリスト一括処理の高速化。",
-      releaseDate = "2024-07-20"
     ),
     StoreAppItem(
       id = "termux",
@@ -184,7 +93,7 @@ object StoreRepository {
       iconUrl = "https://raw.githubusercontent.com/termux/termux-app/master/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
       githubRepo = "termux/termux-app",
       websiteUrl = "https://termux.dev",
-      sourceRepoName = "Hikaproj Official Curated Index",
+      sourceRepoName = "Default Curated Index",
       license = "GPL-3.0",
       minSdk = 24,
       architecture = "Universal / arm64-v8a",
@@ -192,154 +101,17 @@ object StoreRepository {
       downloadUrl = "https://github.com/termux/termux-app/releases/download/v0.118.1/termux-app_v0.118.1+github-debug_universal.apk",
       sizeBytes = 98_000_000L,
       releaseNotes = "パッケージ管理aptの更新とAndroid 14+への適合性向上。",
-      releaseDate = "2024-06-12"
-    ),
-    StoreAppItem(
-      id = "aegis",
-      name = "Aegis Authenticator",
-      packageName = "com.beemdevelopment.aegis",
-      summary = "セキュアで暗号化バックアップ対応の2段階認証 (2FA/OTP) アプリ",
-      description = "Aegis Authenticator は無料でオープンソースの2要素認証（TOTP / HOTP / Steam / Yandex）トークン管理アプリです。\n\n• AES-256-GCM によるヴォールト暗号化と生体認証ロック解除\n• 自動バックアップと他社認証アプリ（Google Authenticator, Authy, 2FAS 等）からの簡単インポート\n• アイコンアイデンティティ整理とグループフィルタリング",
-      category = "セキュリティ",
-      author = "beemdevelopment",
-      iconUrl = "https://raw.githubusercontent.com/beemdevelopment/Aegis/master/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
-      githubRepo = "beemdevelopment/Aegis",
-      websiteUrl = "https://getaegis.app",
-      sourceRepoName = "Hikaproj Official Curated Index",
-      license = "GPL-3.0",
-      minSdk = 23,
-      architecture = "Universal",
-      latestVersion = "v3.1.2",
-      downloadUrl = "https://github.com/beemdevelopment/Aegis/releases/download/v3.1.2/aegis-v3.1.2.apk",
-      sizeBytes = 19_000_000L,
-      releaseNotes = "Material Youダイナミックテーマ、バイオメトリクス保護の安定化。",
-      releaseDate = "2024-09-01"
-    ),
-    StoreAppItem(
-      id = "localsend",
-      name = "LocalSend",
-      packageName = "org.localsend.localsend_app",
-      summary = "インターネット不要でローカルLAN内のPC・スマホ間ファイル高速共有",
-      description = "LocalSend は AirDrop のオープンソース・クロスプラットフォーム代替ツールです。外部サーバーを経由せず、Wi-Fi ネットワーク内で暗号化通信を用いて Android, Windows, macOS, Linux, iOS 間でファイルを直接送受信します。",
-      category = "ネットワーク",
-      author = "localsend",
-      iconUrl = "https://raw.githubusercontent.com/localsend/localsend/main/app/assets/img/logo-512.png",
-      githubRepo = "localsend/localsend",
-      websiteUrl = "https://localsend.org",
-      sourceRepoName = "Hikaproj Official Curated Index",
-      license = "MIT",
-      minSdk = 21,
-      architecture = "arm64-v8a / Universal",
-      latestVersion = "v1.15.4",
-      downloadUrl = "https://github.com/localsend/localsend/releases/download/v1.15.4/LocalSend-1.15.4-android-arm64v8.apk",
-      sizeBytes = 21_500_000L,
-      releaseNotes = "フォルダ一括転送の高速化とWeb共有モードの改善。",
-      releaseDate = "2024-08-29"
-    ),
-    StoreAppItem(
-      id = "obtainium",
-      name = "Obtainium",
-      packageName = "dev.imranr.obtainium",
-      summary = "GitHub・GitLab・F-Droid等のリリースページから直接アプリ更新を追跡",
-      description = "Obtainium はオープンソースアプリのリリースページを直接監視し、新しいバージョンが公開された際に通知・導入できるアップデートトラッカーです。OmniInstaller と併用することで強力なパッケージ管理環境を構築できます。",
-      category = "ユーティリティ",
-      author = "ImranR98",
-      iconUrl = "https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/icon_small.png",
-      githubRepo = "ImranR98/Obtainium",
-      websiteUrl = "https://github.com/ImranR98/Obtainium",
-      sourceRepoName = "Hikaproj Official Curated Index",
-      license = "GPL-3.0",
-      minSdk = 21,
-      architecture = "Universal",
-      latestVersion = "v1.1.26",
-      downloadUrl = "https://github.com/ImranR98/Obtainium/releases/download/v1.1.26/app-release.apk",
-      sizeBytes = 24_800_000L,
-      releaseNotes = "バックグラウンド更新チェックとリポジトリフィルタの改善。",
-      releaseDate = "2024-10-02"
-    ),
-    StoreAppItem(
-      id = "bitwarden",
-      name = "Bitwarden",
-      packageName = "com.x8bit.bitwarden",
-      summary = "ゼロ知識暗号化を採用したオープンソースのパスワード＆パスキーマネージャー",
-      description = "Bitwarden はパスワード、パスキー (Passkeys)、クレジットカード、セキュアノートを安全に保管・自動入力できるオープンソースの資格情報マネージャーです。独自ホスト (Vaultwarden) への接続にも完全対応しています。",
-      category = "セキュリティ",
-      author = "bitwarden",
-      iconUrl = "https://raw.githubusercontent.com/bitwarden/mobile/main/store/google/icon.png",
-      githubRepo = "bitwarden/android",
-      websiteUrl = "https://bitwarden.com",
-      sourceRepoName = "Hikaproj Official Curated Index",
-      license = "GPL-3.0",
-      minSdk = 26,
-      architecture = "Universal",
-      latestVersion = "v2024.10.0",
-      downloadUrl = "https://github.com/bitwarden/android/releases/download/v2024.10.0/com.x8bit.bitwarden.apk",
-      sizeBytes = 31_200_000L,
-      releaseNotes = "ネイティブ Kotlin Jetpack Compose UI への刷新とパスキー応答速度の向上。",
-      releaseDate = "2024-10-12"
-    ),
-    StoreAppItem(
-      id = "k9mail",
-      name = "Thunderbird / K-9 Mail",
-      packageName = "com.fsck.k9",
-      summary = "OpenPGP暗号化とマルチアカウント管理に対応した本格メールクライアント",
-      description = "K-9 Mail (現 Thunderbird for Android) は、IMAP Push、OpenPGP (OpenKeychain連携) によるメール暗号化、統合受信トレイを備えた高機能オープンソースメーラーです。",
-      category = "ツール",
-      author = "thunderbird",
-      iconUrl = "https://raw.githubusercontent.com/thunderbird/thunderbird-android/main/app-k9mail/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
-      githubRepo = "thunderbird/thunderbird-android",
-      websiteUrl = "https://k9mail.app",
-      sourceRepoName = "Hikaproj Official Curated Index",
-      license = "Apache-2.0",
-      minSdk = 24,
-      architecture = "Universal",
-      latestVersion = "v8.0",
-      downloadUrl = "https://github.com/thunderbird/thunderbird-android/releases/download/THUNDERBIRD_8_0/k9mail-8.0.apk",
-      sizeBytes = 16_400_000L,
-      releaseNotes = "アカウントセットアップウィザードの刷新とフォルダ同期の省電力化。",
-      releaseDate = "2024-10-30"
-    ),
-    StoreAppItem(
-      id = " breezy_weather",
-      name = "Breezy Weather",
-      packageName = "org.breezyweather",
-      summary = "美しいMaterial Youグラフと豊富な気象ソースを備えたオープンソース天気アプリ",
-      description = "Breezy Weather は Open-Meteo、AccuWeather 等50種類以上の気象データプロバイダに対応し、大気質、花粉、風速、降水確率をリッチなアニメーションとウィジェットで表示する天気アプリです。",
-      category = "ユーティリティ",
-      author = "breezy-weather",
-      iconUrl = "https://raw.githubusercontent.com/breezy-weather/breezy-weather/main/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
-      githubRepo = "breezy-weather/breezy-weather",
-      websiteUrl = "https://github.com/breezy-weather/breezy-weather",
-      sourceRepoName = "Hikaproj Official Curated Index",
-      license = "LGPL-3.0",
-      minSdk = 21,
-      architecture = "arm64-v8a / Universal",
-      latestVersion = "v5.3.2",
-      downloadUrl = "https://github.com/breezy-weather/breezy-weather/releases/download/v5.3.2/breezy-weather-arm64-v8a-5.3.2_standard.apk",
-      sizeBytes = 18_700_000L,
-      releaseNotes = "週間天気チャートの視認性向上とウィジェット更新の安定化。",
-      releaseDate = "2024-10-08"
-    ),
-    StoreAppItem(
-      id = "droidify",
-      name = "Droid-ify",
-      packageName = "com.looker.droidify",
-      summary = "Material Design 3 採用の高速・モダンな F-Droid クライアント",
-      description = "Droid-ify は F-Droid リポジトリエコシステムを快適にブラウズ・検索・導入できる軽量クライアントです。カスタムリポジトリの高速インデックス同期をサポートします。",
-      category = "ユーティリティ",
-      author = "Droid-ify",
-      iconUrl = "https://raw.githubusercontent.com/Droid-ify/client/main/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
-      githubRepo = "Droid-ify/client",
-      websiteUrl = "https://github.com/Droid-ify/client",
-      sourceRepoName = "Hikaproj Official Curated Index",
-      license = "GPL-3.0",
-      minSdk = 23,
-      architecture = "Universal",
-      latestVersion = "v0.6.3",
-      downloadUrl = "https://github.com/Droid-ify/client/releases/download/v0.6.3/app-release.apk",
-      sizeBytes = 7_900_000L,
-      releaseNotes = "Shizuku / Root インストーラー連携の安定性向上。",
-      releaseDate = "2024-09-14"
+      releaseDate = "2024-06-12",
+      versions = listOf(
+        StoreReleaseVersion(
+          versionName = "v0.118.1 (Universal)",
+          downloadUrl = "https://github.com/termux/termux-app/releases/download/v0.118.1/termux-app_v0.118.1+github-debug_universal.apk",
+          sizeBytes = 98_000_000L,
+          releaseDate = "2024-06-12",
+          changelog = "パッケージ管理aptの更新とAndroid 14+への適合性向上",
+          abi = "Universal"
+        )
+      )
     )
   )
 
@@ -367,7 +139,7 @@ object StoreRepository {
       val url = "https://api.github.com/repos/$cleanRepo/releases"
       val request = Request.Builder()
         .url(url)
-        .header("User-Agent", "Hikaproj-OmniInstaller-Android")
+        .header("User-Agent", "OmniInstaller-Android")
         .header("Accept", "application/vnd.github.v3+json")
         .build()
 
@@ -404,7 +176,6 @@ object StoreRepository {
           val assets = relObj.optJSONArray("assets") ?: JSONArray()
           var bestUrlForRelease: String? = null
           var bestSizeForRelease = 0L
-          var bestAbiLabel = "Universal"
 
           for (i in 0 until assets.length()) {
             val asset = assets.getJSONObject(i)
@@ -439,7 +210,6 @@ object StoreRepository {
               if (bestUrlForRelease == null || isPreferredAbi) {
                 bestUrlForRelease = downloadUrl
                 bestSizeForRelease = size
-                bestAbiLabel = abiLabel
               }
             }
           }
@@ -468,9 +238,9 @@ object StoreRepository {
           id = cleanRepo.replace("/", "_").lowercase(),
           name = appTitle,
           packageName = "com.github.${owner.lowercase().replace("[^a-z0-9]".toRegex(), "")}.${repoName.lowercase().replace("[^a-z0-9]".toRegex(), "")}",
-          summary = "GitHub ($cleanRepo) から直接取得された最新リリース",
+          summary = "GitHub ($cleanRepo) から取得された最新リリース",
           description = latestBody.ifBlank { "GitHub リポジトリ $cleanRepo の公式リリースパッケージです。" },
-          category = "GitHub リポ",
+          category = "GitHub",
           author = owner,
           iconUrl = "https://github.com/$owner.png",
           githubRepo = cleanRepo,
@@ -493,14 +263,6 @@ object StoreRepository {
     }
   }
 
-  /**
-   * Syncs a custom repository URL or raw JSON text.
-   * Supports:
-   * 1. OmniInstaller Repository Schema: `{ "repo_name": "...", "apps": [ ... ] }`
-   * 2. Direct JSON Array of Apps: `[ { "id": "...", "name": "...", "download_url": "..." }, ... ]`
-   * 3. F-Droid Index v1 Schema: `{ "repo": { "name": "...", "address": "..." }, "apps": [ ... ], "packages": { ... } }`
-   * 4. Obtainium / Repo List Schema: `[ "owner/repo1", "owner/repo2" ]` or `{ "configs": [ { "url": "..." } ] }`
-   */
   suspend fun syncCustomHost(urlOrJson: String): Pair<StoreRepositorySource?, List<StoreAppItem>> = withContext(Dispatchers.IO) {
     try {
       val trimmed = urlOrJson.trim()
@@ -514,7 +276,7 @@ object StoreRepository {
         sourceUrl = trimmed
         val request = Request.Builder()
           .url(sourceUrl)
-          .header("User-Agent", "Hikaproj-OmniInstaller-Android")
+          .header("User-Agent", "OmniInstaller-Android")
           .build()
 
         rawText = client.newCall(request).execute().use { response ->
@@ -548,7 +310,6 @@ object StoreRepository {
             parseAppJsonObject(elem, i, repoName)?.let { list.add(it) }
           }
           is String -> {
-            // Array of GitHub repo names or URLs
             fetchGitHubRelease(elem)?.let { list.add(it) }
           }
         }
@@ -558,7 +319,6 @@ object StoreRepository {
       repoName = root.optString("repo_name", root.optString("name", repoName))
       repoDesc = root.optString("description", repoDesc)
 
-      // Check F-Droid style `repo` metadata
       val fdroidRepoObj = root.optJSONObject("repo")
       val fdroidBaseAddress = fdroidRepoObj?.optString("address", "")?.trimEnd('/') ?: ""
       if (fdroidRepoObj != null) {
@@ -573,7 +333,6 @@ object StoreRepository {
         for (i in 0 until appsArray.length()) {
           val obj = appsArray.optJSONObject(i) ?: continue
           if (packagesMap != null && fdroidBaseAddress.isNotBlank()) {
-            // F-Droid index-v1 format
             val pkgName = obj.optString("packageName", "")
             val pkgVersions = packagesMap.optJSONArray(pkgName)
             val firstPkg = pkgVersions?.optJSONObject(0)
@@ -615,7 +374,6 @@ object StoreRepository {
           }
         }
       } else if (root.has("configs")) {
-        // Obtainium export JSON format
         val configs = root.optJSONArray("configs") ?: JSONArray()
         for (i in 0 until configs.length()) {
           val cfg = configs.optJSONObject(i) ?: continue
@@ -625,7 +383,6 @@ object StoreRepository {
           }
         }
       } else if (root.has("download_url") || root.has("apk_url") || root.has("package_name")) {
-        // Single app JSON object
         parseAppJsonObject(root, 0, repoName)?.let { list.add(it) }
       }
     }
@@ -644,10 +401,6 @@ object StoreRepository {
   private fun parseAppJsonObject(obj: JSONObject, index: Int, defaultRepoName: String): StoreAppItem? {
     val githubRepo = obj.optString("github_repo", obj.optString("github", "")).ifBlank { null }
     val downloadUrl = obj.optString("download_url", obj.optString("apk_url", obj.optString("url", "")))
-    if (downloadUrl.isBlank() && githubRepo != null) {
-      // Can be resolved via GitHub release
-      return null
-    }
     if (downloadUrl.isBlank()) return null
 
     val pkgName = obj.optString("package_name", obj.optString("packageName", "com.custom.app$index"))
@@ -695,7 +448,7 @@ object StoreRepository {
       githubRepo = githubRepo,
       websiteUrl = obj.optString("website_url", obj.optString("website", "")),
       sourceRepoName = obj.optString("repo_name", defaultRepoName),
-      license = obj.optString("license", "Custom / Open Source"),
+      license = obj.optString("license", "Open Source"),
       minSdk = obj.optInt("min_sdk", 24),
       architecture = obj.optString("architecture", "Universal"),
       latestVersion = ver,
@@ -707,16 +460,12 @@ object StoreRepository {
     )
   }
 
-  /**
-   * Batch imports multiple repositories, GitHub owner/repo lines, or JSON manifests at once.
-   */
   suspend fun batchImportSources(
     rawInput: String
   ): Pair<List<StoreRepositorySource>, List<StoreAppItem>> = withContext(Dispatchers.IO) {
     val trimmed = rawInput.trim()
     if (trimmed.isEmpty()) return@withContext (emptyList<StoreRepositorySource>() to emptyList())
 
-    // If the entire input is a JSON array or object, parse it directly
     if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
       val (repoSource, items) = parseRepositoryJsonText(trimmed, "local://batch-json")
       val repos = if (repoSource != null) listOf(repoSource) else emptyList()
@@ -798,12 +547,12 @@ object StoreRepository {
     preferredId: String? = null,
     expectedSize: Long = 0L
   ): Flow<DownloadProgress> = flow {
-    emit(DownloadProgress(0f, 0L, expectedSize, null, "直リンクへ接続中..."))
+    emit(DownloadProgress(0f, 0L, expectedSize, null, "接続中..."))
 
     try {
       val request = Request.Builder()
         .url(directUrl.trim())
-        .header("User-Agent", "Hikaproj-OmniInstaller-Android")
+        .header("User-Agent", "OmniInstaller-Android")
         .build()
 
       client.newCall(request).execute().use { response ->
@@ -815,7 +564,6 @@ object StoreRepository {
         val body = response.body ?: throw IllegalStateException("レスポンスボディが空です")
         val contentLength = if (body.contentLength() > 0) body.contentLength() else expectedSize
 
-        // Detect filename from Content-Disposition or URL path
         val disposition = response.header("Content-Disposition") ?: ""
         val fileNameFromHeader = Regex("filename\\*?=(?:UTF-8'')?\"?([^\";]+)\"?", RegexOption.IGNORE_CASE)
           .find(disposition)
@@ -836,10 +584,11 @@ object StoreRepository {
         body.byteStream().use { input ->
           FileOutputStream(outFile).use { output ->
             val buffer = ByteArray(32768)
-            var bytesRead: Int
             var totalRead = 0L
 
-            while (input.read(buffer).also { bytesRead = it } != -1) {
+            while (true) {
+              val bytesRead = input.read(buffer)
+              if (bytesRead == -1) break
               output.write(buffer, 0, bytesRead)
               totalRead += bytesRead
               val progress = if (contentLength > 0) (totalRead.toFloat() / contentLength).coerceIn(0f, 0.99f) else 0.5f
@@ -868,20 +617,9 @@ object StoreRepository {
       lower.endsWith(".apks") -> "apks"
       lower.endsWith(".apkm") -> "apkm"
       lower.endsWith(".aab") -> "aab"
-      lower.endsWith(".omni") -> "omni"
-      lower.endsWith(".hpjpkg") -> "hpjpkg"
-      lower.endsWith(".omnibak") -> "omnibak"
-      lower.endsWith(".hpjbak") -> "hpjbak"
-      lower.endsWith(".zapk") -> "zapk"
-      lower.endsWith(".sapk") -> "sapk"
-      lower.endsWith(".mapk") -> "mapk"
-      lower.endsWith(".bapk") -> "bapk"
-      lower.endsWith(".apk+") -> "apk+"
       lower.endsWith(".apex") -> "apex"
-      lower.endsWith(".pack") -> "pack"
       lower.endsWith(".jar") -> "jar"
       lower.endsWith(".ab") -> "ab"
-      lower.endsWith(".bin") -> "bin"
       lower.endsWith(".zip") -> "zip"
       else -> "apk"
     }

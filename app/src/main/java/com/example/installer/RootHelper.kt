@@ -56,12 +56,13 @@ object RootHelper {
       val reader = BufferedReader(InputStreamReader(process.inputStream))
       val errorReader = BufferedReader(InputStreamReader(process.errorStream))
       val output = StringBuilder()
-      var line: String?
 
-      while (reader.readLine().also { line = it } != null) {
+      while (true) {
+        val line = reader.readLine() ?: break
         output.append(line).append("\n")
       }
-      while (errorReader.readLine().also { line = it } != null) {
+      while (true) {
+        val line = errorReader.readLine() ?: break
         output.append(line).append("\n")
       }
 
@@ -98,5 +99,15 @@ object RootHelper {
 
   suspend fun silentUninstall(packageName: String): SuResult {
     return runSu("pm uninstall $packageName")
+  }
+
+  suspend fun grantPermission(packageName: String, permission: String): SuResult {
+    val fullPerm = if (permission.contains(".")) permission else "android.permission.$permission"
+    return runSu("pm grant \"$packageName\" \"$fullPerm\"")
+  }
+
+  suspend fun revokePermission(packageName: String, permission: String): SuResult {
+    val fullPerm = if (permission.contains(".")) permission else "android.permission.$permission"
+    return runSu("pm revoke \"$packageName\" \"$fullPerm\"")
   }
 }

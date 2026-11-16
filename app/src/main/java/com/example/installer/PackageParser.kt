@@ -98,7 +98,6 @@ object PackageParser {
             entry = zis.nextEntry
           }
 
-          if (hasOmniJson) return ArchiveFormat.OMNI
           if (hasInfoJson && apkCount > 0) return ArchiveFormat.APKM
           if (hasObb || (hasManifestJson && apkCount > 0)) return ArchiveFormat.XAPK
           if (apkCount > 1) return ArchiveFormat.SPLIT_APKS
@@ -115,7 +114,7 @@ object PackageParser {
     val format = detectFormat(inputFile, fileName)
 
     return when (format) {
-      ArchiveFormat.APK, ArchiveFormat.BIN_APK -> parseSingleApk(context, uri, inputFile, fileName, format)
+      ArchiveFormat.APK -> parseSingleApk(context, uri, inputFile, fileName, format)
       ArchiveFormat.APKS_GZIP -> parseGzipPackage(context, uri, inputFile, fileName)
       ArchiveFormat.APKS_TAR, ArchiveFormat.APKS_TAR_GZ, ArchiveFormat.APKS_TGZ ->
         parseTarPackage(context, uri, inputFile, fileName, format)

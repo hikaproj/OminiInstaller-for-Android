@@ -1,93 +1,69 @@
-# OmniInstaller (`hikaproj-ominiinstaller-v[バージョン].apk`)
+# OmniInstaller — 次世代マルチフォーマットAPKインストーラー＆統合パッケージ管理スイート
 
 **開発者 (Developer):** **Hikaproj**  
-**詳細技術仕様書:** [**docs/SPECIFICATION.md (hpjominii:// スキーム・リポジトリJSON・全対応形式の詳細仕様はこちら)**](./docs/SPECIFICATION.md)
+**対応OS:** Android 7.0 (API 24) 〜 Android 16 (API 36)  
+**アーキテクチャ:** Kotlin + Jetpack Compose (Material 3) + MVVM + Coroutines
 
 ---
 
-## 概要 (Overview)
+## 📖 概要 (Overview)
 
-**OmniInstaller** は、**Hikaproj** によって設計・開発された、Android 向けの次世代・万能パッケージインストーラー、マルチリポジトリ対応アプリストア、24形式対応バックアップ＆リストアマネージャー、および Cloudflare Tunnel 対応の PC 遠隔導入スイートです。
+**OmniInstaller** は、**Hikaproj** によって設計・開発された、Android 向けの総合パッケージインストーラー・オープンソースアプリストア・遠隔操作サーバー・アプリメタデータ＆権限管理スイートです。
 
-単体の `.apk` はもちろん、`.xapk`（OBBデータ同梱）、`.apks`（Split APKs）、`.apkm`、`.aab`、`.omni`、`.hpjpkg`、`.tar.gz` など **26種類以上のインストール形式** と、端末内の**複数APKファイル同時選択インストール**、さらには **APK直リンクからの直接ダウンロード導入** に対応しています。また、ビルド成果物および GitHub Actions リリースでは自動的に `hikaproj-ominiinstaller-v[バージョン].apk` の形式で出力されます。
+単体の `.apk` だけでなく、`.xapk`, `.apks`, `.apkm`, `.aab`, `.zip`, `.apex`, `.tar`, `.tar.gz`, `.tgz` などの実在する標準パッケージ形式や複数の Split APK ファイルの同時選択、HTTP/HTTPS 直リンクからの直接導入に完全対応しています。
+さらに、**既存アプリやインストール時におけるバンドル名・バージョン・名前・ジャンルの変更**、**権限の直接編集 (Grant / Revoke)**、**設定維持機能付きの PC 遠隔操作＆アプリ管理 Web コンソール** を1つのモダンな UI に統合しています。
 
----
-
-## 主な機能 (Key Features)
-
-### 1. 26種類以上のパッケージ形式＆複数APK・直リンク対応インストーラー
-- **26種類のパッケージ形式をネイティブ解析:**
-  - `.apk`, `.apks`, `.xapk`, `.apkm`, `.aab`, `.zip`, `.omni`, `.hpjpkg`, `.apex`, `.tar`, `.tar.gz`, `.tgz`, `.apk.gz`, `.apk+`, `.zapk`, `.sapk`, `.mapk`, `.bapk`, `.pack`, `.jar`, `.obb.zip`, `.ab`, `.omnibak`, `.hpjbak`, `.bin`、および複数APKファイルの同時選択バンドルに対応。
-- **［複数のAPK］(Split APKs / Multi-APK) インストールバグの完全対策:**
-  - 端末内でバラバラに保存された `base.apk` と `split_config.*.apk` を複数同時選択して1つのセッションで統合インストール可能。
-  - アーカイブ内に端末非対応のCPUアーキテクチャ（例: `arm64-v8a` 端末における `x86` Split）が混在している場合、`Build.SUPPORTED_ABIS` と照合して非互換 Split を自動除外し、展開後の正確な合計サイズで `PackageInstaller.Session` を構築します。
-- **APK / パッケージ直リンクからの直接導入:**
-  - HTTP/HTTPS の直リンクURLを入力するだけで、プログレスバー表示付きでダウンロードし、完了と同時にパッケージ解析・インストールへ移行します。
-- **Root / 非Root ハイブリッド対応:**
-  - 非Root環境では OS 標準の `PackageInstaller` セッション API による安全な導入を行い、Root環境（Magisk / KernelSU / APatch）では `pm install-create` を用いたサイレントインストールを選択できます。
-
-### 2. 次世代アプリストア（専用詳細ページ・一括追加・`hpjominii://` 対応）
-- **アプリごとの専用詳細ページ (`StoreAppDetailScreen`):**
-  - ストア内のアプリをタップすると専用ページへ遷移し、詳細な機能解説、ライセンス、要求SDK、対応アーキテクチャ、リリースノート、過去のバージョン／ABI別ビルド一覧、GitHub/公式サイトへのリンク、および共有用の `hpjominii://` リンクを確認・導入できます。
-- **リポジトリ・アプリリストの一括追加 & 大規模カタログ対応:**
-  - 複数の GitHub リポジトリ (`owner/repo`)、独自ホスト JSON URL、F-Droid `index-v1.json`、Obtainium エクスポート JSON などを改行・カンマ区切りで一度に一括登録・同期できます。
-- **`hpjominii://` カスタムURIディープリンク完全対応:**
-  - `hpjominii://store/repo?urls=...&github=...` から複数リポジトリの一括追加画面を起動。
-  - `hpjominii://store/app?...` からアプリの専用詳細ページを直接表示（**まだリポジトリを追加していない端末でも、クエリパラメータやGitHub指定から動的に専用ページを生成して開くことが可能**）。
-  - `hpjominii://install?url=...` から直リンクパッケージを直接ダウンロード＆インストール。
-  - 詳しいパラメータ仕様は [**docs/SPECIFICATION.md**](./docs/SPECIFICATION.md) をご参照ください。
-
-### 3. 24種類の書き出し形式に対応するバックアップ＆リストア
-- インストール済みアプリ（Split APK 構成アプリを含む）を以下の **24種類** のアーカイブ形式で書き出し・共有・復元できます：
-  - `.omni`, `.hpjpkg`, `.xapk`, `.apks`, `.apkm`, `.apk`, `.zip`, `.omnibak`, `.hpjbak`, `.tar`, `.tar.gz`, `.tgz`, `.apk.gz`, `.aab`, `.zapk`, `.sapk`, `.mapk`, `.bapk`, `.apk+`, `.apex`, `.jar`, `.pack`, `.ab`, `.bin`
-- Root環境では `/data/data/<package>` のアプリデータ領域を含めたフルアーカイブにも対応します。
-
-### 4. PC遠隔インストール（ポート変更・全NIC対応・Cloudflare Tunnel 機能）
-- **アクセス不能バグの解消とマルチIP表示:**
-  - サーバーソケットを `0.0.0.0`（全インターフェース）にバインドし、Wi-Fi (`wlan0`) やホットスポット (`ap0`) など端末が持つすべてのローカルIPv4アドレスを自動検出して一覧表示します。
-- **自由なポート番号変更:**
-  - `1024` 〜 `65535` の任意のポート番号へUI上からワンタップで変更・再バインドできます。
-- **PCブラウザからのドラッグ＆ドロップ導入＋直リンク遠隔送信:**
-  - PCブラウザで表示されるモダンなWeb UIへパッケージをドロップするか、PC側からAPK直リンクURLを送信するだけで、Android端末側へ即座に展開されます。
-- **Cloudflare Tunnel (`cloudflared`) 連携機能（著作権・ライセンス完全準拠）:**
-  - 外出先や別セグメントのPCからも安全にHTTPS経由でパッケージを遠隔送信できるよう、Cloudflare Tunnel 連携機能を搭載しています。
-  - Zero Trust トンネルトークン、カスタムパブリックホスト名、および Quick Tunnel (`trycloudflare.com`) コマンド生成をサポートしています。
+👉 **[詳細技術仕様書 (docs/SPECIFICATION.md) はこちら](./docs/SPECIFICATION.md)**
 
 ---
 
-## 詳細仕様書へのリンク (Specification Document)
+## ✨ 主な機能 (Key Features)
 
-`hpjominii://` ディープリンクの全エンドポイント、クエリパラメータ、リポジトリ未登録時のアプリ詳細ページ呼び出し方法、ストアリポジトリのJSONスキーマ、および全フォーマットの技術仕様については、以下の専用ドキュメントをご覧ください。
+### 1. 📦 万能マルチフォーマットインストーラー＆導入時カスタム編集
+- **標準パッケージ形式に幅広く対応**:
+  `.apk`, `.xapk`, `.apks`, `.apkm`, `.aab`, `.zip`, `.apex`, `.tar`, `.tar.gz`, `.tgz`, `.apk.gz`, `.jar`, `.obb.zip` 等の実在形式を自動判別・展開します。
+- **インストール時のバンドル名・バージョン・名前・ジャンル変更**:
+  パッケージ解析後に「インストール時に名前・バンドル名・バージョン・ジャンルを変更」パネルを開き、アプリ名・Package Name・バージョン名・ビルド番号・ジャンルを自在に書き換えてからインストールできます。
+- **導入後のクイック操作**:
+  インストール完了後（または導入済みパッケージ選択時）に **「再インストール」「開く」「削除」** の3ボタンへ即座に切り替わります。
+- **複数の APK (Split APKs) 同時選択＆直リンク導入**:
+  バラバラの `base.apk` + `split_config.*.apk` の複数同時選択や、HTTP/HTTPS 直リンク URL からの直接ダウンロード＆解析に対応しています。
 
-👉 **[OmniInstaller 技術仕様書・プロトコルリファレンス (`docs/SPECIFICATION.md`)](./docs/SPECIFICATION.md)**
+### 2. 🛍️ アプリストア (LocalSend & Termux 厳選初期収録 + 一括追加)
+- **厳選デフォルト収録**:
+  初期状態では **LocalSend** と **Termux** の2つのみをクリーンに収録しています。
+- **リポジトリ・アプリリスト一括追加**:
+  複数の GitHub リポジトリ (`owner/repo`)、独自ホスト JSON、F-Droid 互換 `index-v1.json` を改行やカンマ区切りで一括インポートできます。
+- **アプリ専用詳細ページ**:
+  ストア内のアプリをタップすると専用詳細ページが開き、導入済みアプリでは **「再インストール」「開く」「削除」** を直接実行できます。
+
+### 3. 🛡️ アプリ管理・アイコン表示・メタデータ変更・権限編集
+- **アプリアイコン表示**:
+  端末にインストールされている各アプリの実際のアイコンを表示します。
+- **既存アプリのバンドル名・バージョン・名前・ジャンル変更**:
+  インストール済みアプリの詳細シートから、アプリ表示名・バンドル名 (Package Name)・バージョン・ビルド番号・ジャンルを編集して保存、または APK マニフェストを書き換えて再インストールできます。
+- **インタラクティブ権限編集 (Grant / Revoke)**:
+  各アプリが要求する権限一覧を危険度別に監査し、スイッチ操作で権限の許可 (Grant) / 拒否 (Revoke) を直接切り替えられます。
+
+### 4. 💻 PC 遠隔操作・アプリ管理サーバー＆設定維持
+- **設定の自動永続化**:
+  ポート番号、自動起動設定、遠隔操作権限スイッチ、Cloudflare Tunnel 設定はすべて保存され、次回アプリを開いた際にもそのまま維持されます。
+- **遠隔操作権限に応じた PC ブラウザからのフル管理**:
+  遠隔操作権限を有効にすると、PC ブラウザの Web コンソールからパッケージ導入だけでなく、**端末内アプリの一覧・起動・削除・APK抽出・名前/バンドル名/バージョン変更・権限編集・キャッシュ消去** までシームレスに実行できます。
+- **Cloudflare Tunnel 連携 (著作権・ライセンス遵守)**:
+  Apache License 2.0 のオープンソース `cloudflared` クライアント連携に対応し、プロプライエタリバイナリの無断同梱を行わないクリーンな設計です。
 
 ---
 
-## ビルド方法と出力APKファイル名 (Build & Release)
+## 🛠️ ビルドと GitHub Actions バージョン自動反映
 
-本プロジェクトでは、Gradle 設定 (`app/build.gradle.kts`) および GitHub Actions ワークフロー (`.github/workflows/build-release.yml`) の双方において、生成されるAPKファイル名が以下の規則に従うよう構成されています。
+GitHub Actions でのビルド時に決定されるバージョン (`APP_VERSION_NAME` / `APP_VERSION_CODE`) が APK の `versionName` / `versionCode` および出力ファイル名 `hikaproj-ominiinstaller-v[バージョン].apk` に自動反映されます。
 
-```text
-hikaproj-ominiinstaller-v[バージョン].apk
-```
-（例: `hikaproj-ominiinstaller-v1.0.apk` または CI ビルド時 `hikaproj-ominiinstaller-v1.0.15.apk`）
-
-### ローカルでのビルド手順
 ```bash
-# デバッグビルド
-gradle assembleDebug
-
-# リリースビルド
-gradle assembleRelease
+./gradlew assembleRelease -PAPP_VERSION_NAME="1.0.1" -PAPP_VERSION_CODE="1"
 ```
 
 ---
 
-## 著作権・オープンソースライセンスに関する表記 (Copyright & Licenses)
-
-- **アプリケーション開発・著作権:**
-  - Copyright © **Hikaproj**. All rights reserved.
-- **Cloudflare Tunnel (`cloudflared`) に関する表記:**
-  - Cloudflare® は Cloudflare, Inc. の登録商標です。
-  - `cloudflared` は Cloudflare, Inc. により [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) の下で公開されているオープンソースソフトウェアです。
-  - 本アプリケーションは、第三者のプロプライエタリバイナリを無断でアプリ内部に同梱・再配布することなく、標準HTTPリバースプロキシ仕様およびユーザー環境（PC または Termux 等）に導入された `cloudflared` クライアントとのプロセス連携によって著作権およびライセンス条項を完全に遵守しています。
+## 👨‍💻 開発者 (Author)
+- **Developer:** **Hikaproj**

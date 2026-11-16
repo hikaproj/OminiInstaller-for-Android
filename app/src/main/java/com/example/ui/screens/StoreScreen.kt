@@ -1,8 +1,5 @@
 package com.example.ui.screens
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -30,18 +27,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.CloudDownload
-import androidx.compose.material.icons.filled.CloudSync
-import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Verified
@@ -82,6 +75,7 @@ import com.example.model.StoreAppItem
 import com.example.model.StoreRepositorySource
 import com.example.ui.MainViewModel
 import com.example.ui.components.AppHeader
+import com.example.ui.theme.AccentDanger
 import com.example.ui.theme.AccentSuccess
 import com.example.ui.theme.AccentWarning
 import com.example.ui.theme.JetBrainsMono
@@ -102,7 +96,6 @@ fun StoreScreen(
   val optState by viewModel.optimizationState.collectAsState()
 
   var showBulkImportDialog by remember { mutableStateOf(false) }
-  var showDeepLinkTesterDialog by remember { mutableStateOf(false) }
 
   // If an app is selected, display its full dedicated App Detail Page!
   selectedApp?.let { detailApp ->
@@ -110,7 +103,9 @@ fun StoreScreen(
       item = detailApp,
       downloadProgress = downloadMap[detailApp.id],
       onBack = { viewModel.openStoreAppDetail(null) },
-      onDownloadVersion = { url -> viewModel.downloadAndInstallStoreApp(detailApp, url) }
+      onDownloadVersion = { url -> viewModel.downloadAndInstallStoreApp(detailApp, url) },
+      onOpenApp = { viewModel.launchInstalledApp(detailApp.packageName) },
+      onUninstallApp = { viewModel.uninstallSingleApp(detailApp.packageName) }
     )
     return
   }
@@ -141,21 +136,16 @@ fun StoreScreen(
   ) {
     AppHeader(
       title = "アプリストア",
-      subtitle = "GitHub・独自ホスト・大規模リポジトリ・hpjominii:// 完全対応",
+      subtitle = "GitHub・独自ホスト・大規模リポジトリ自動同期対応",
       isRooted = optState.isRooted,
       trailingContent = {
-        Row {
-          IconButton(onClick = { showDeepLinkTesterDialog = true }) {
-            Icon(Icons.Default.Link, contentDescription = "hpjominiiリンク起動")
-          }
-          IconButton(onClick = { viewModel.refreshInstalledApps() }) {
-            Icon(Icons.Default.Refresh, contentDescription = "更新確認")
-          }
+        IconButton(onClick = { viewModel.refreshInstalledApps() }) {
+          Icon(Icons.Default.Refresh, contentDescription = "更新確認")
         }
       }
     )
 
-    // Action bar: Bulk Add Repositories / Apps & DeepLink Launcher
+    // Action bar: Bulk Add Repositories / Apps
     Row(
       modifier = Modifier
         .fillMaxWidth()
@@ -165,24 +155,14 @@ fun StoreScreen(
       Button(
         onClick = { showBulkImportDialog = true },
         modifier = Modifier
-          .weight(1f)
+          .fillMaxWidth()
           .testTag("bulk_repo_add_button"),
         shape = RoundedCornerShape(12.dp),
         colors = ButtonDefaults.buttonColors(containerColor = TechPrimary)
       ) {
         Icon(Icons.Default.PlaylistAdd, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(6.dp))
-        Text("リポジトリ・アプリ一括追加", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-      }
-
-      OutlinedButton(
-        onClick = { showDeepLinkTesterDialog = true },
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.testTag("deeplink_launcher_button")
-      ) {
-        Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(16.dp))
-        Spacer(modifier = Modifier.width(4.dp))
-        Text("hpjominii://", fontSize = 12.sp, fontFamily = JetBrainsMono, fontWeight = FontWeight.Bold)
+        Text("リポジトリ・アプリリスト一括追加", fontSize = 12.sp, fontWeight = FontWeight.Bold)
       }
     }
 
@@ -248,7 +228,7 @@ fun StoreScreen(
       }
     }
 
-    // App List (LazyColumn handles hundreds/thousands of apps smoothly)
+    // App List
     LazyColumn(
       modifier = Modifier
         .fillMaxSize()
@@ -261,7 +241,9 @@ fun StoreScreen(
           item = item,
           downloadProgress = downloadProgress,
           onOpenDetail = { viewModel.openStoreAppDetail(item) },
-          onDownload = { viewModel.downloadAndInstallStoreApp(item) }
+          onDownload = { viewModel.downloadAndInstallStoreApp(item) },
+          onOpenApp = { viewModel.launchInstalledApp(item.packageName) },
+          onUninstallApp = { viewModel.uninstallSingleApp(item.packageName) }
         )
       }
     }
@@ -288,7 +270,7 @@ fun StoreScreen(
             onValueChange = { rawInput = it },
             placeholder = {
               Text(
-                "例:\nKRTirtho/spotube\nhttps://my-host.example.com/repo.json\nImranR98/Obtainium",
+                "例:\nlocalsend/localsend\ntermux/termux-app\nhttps://my-host.example.com/repo.json",
                 fontSize = 11.sp,
                 fontFamily = JetBrainsMono
               )
@@ -314,68 +296,6 @@ fun StoreScreen(
       dismissButton = {
         TextButton(onClick = { showBulkImportDialog = false }) {
           Text("キャンセル")
-        }
-      }
-    )
-  }
-
-  // DeepLink (hpjominii://) Direct Launcher & Tester Dialog
-  if (showDeepLinkTesterDialog) {
-    var deepLinkInput by remember {
-      mutableStateOf("hpjominii://store/app?name=DemoApp&pkg=com.hikaproj.demo&version=v2.0&author=Hikaproj&desc=リポジトリ未登録でも直接専用ページを開けるデモ")
-    }
-    AlertDialog(
-      onDismissRequest = { showDeepLinkTesterDialog = false },
-      title = { Text("hpjominii:// ディープリンク実行", fontWeight = FontWeight.Bold) },
-      text = {
-        Column {
-          Text(
-            text = "hpjominii:// スキームのリンクを入力して、リポジトリ一括追加ページや未登録アプリの専用詳細ページ、直リンク導入を直接呼び出せます。",
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-          )
-          Spacer(modifier = Modifier.height(8.dp))
-          OutlinedTextField(
-            value = deepLinkInput,
-            onValueChange = { deepLinkInput = it },
-            modifier = Modifier.fillMaxWidth(),
-            maxLines = 4
-          )
-          Spacer(modifier = Modifier.height(8.dp))
-          Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            TextButton(
-              onClick = {
-                deepLinkInput = "hpjominii://store/repo?github=TeamNewPipe/NewPipe,JunkFood02/Seal"
-              }
-            ) {
-              Text("複数リポ追加例", fontSize = 11.sp)
-            }
-            TextButton(
-              onClick = {
-                deepLinkInput = "hpjominii://store/app?github=ImranR98/Obtainium"
-              }
-            ) {
-              Text("未登録アプリ詳細例", fontSize = 11.sp)
-            }
-          }
-        }
-      },
-      confirmButton = {
-        Button(
-          onClick = {
-            showDeepLinkTesterDialog = false
-            runCatching { Uri.parse(deepLinkInput.trim()) }.getOrNull()?.let { uri ->
-              viewModel.handleDeepLink(uri)
-            }
-          },
-          enabled = deepLinkInput.isNotBlank()
-        ) {
-          Text("リンクを開く")
-        }
-      },
-      dismissButton = {
-        TextButton(onClick = { showDeepLinkTesterDialog = false }) {
-          Text("閉じる")
         }
       }
     )
@@ -422,7 +342,9 @@ fun StoreAppCard(
   item: StoreAppItem,
   downloadProgress: com.example.store.DownloadProgress?,
   onOpenDetail: () -> Unit,
-  onDownload: () -> Unit
+  onDownload: () -> Unit,
+  onOpenApp: () -> Unit,
+  onUninstallApp: () -> Unit
 ) {
   Card(
     modifier = Modifier
@@ -564,43 +486,82 @@ fun StoreAppCard(
 
       Spacer(modifier = Modifier.height(10.dp))
 
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-      ) {
-        OutlinedButton(
-          onClick = onOpenDetail,
-          modifier = Modifier.weight(1f),
-          shape = RoundedCornerShape(10.dp)
+      if (item.isInstalled) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-          Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp))
-          Spacer(modifier = Modifier.width(6.dp))
-          Text("専用ページ・詳細", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-        }
+          Button(
+            onClick = onDownload,
+            modifier = Modifier.weight(1.2f),
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = TechPrimary)
+          ) {
+            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("再インストール", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+          }
 
-        Button(
-          onClick = onDownload,
-          modifier = Modifier.weight(1.3f),
-          shape = RoundedCornerShape(10.dp),
-          colors = ButtonDefaults.buttonColors(
-            containerColor = if (item.isUpdateAvailable) AccentWarning else TechPrimary
-          )
+          Button(
+            onClick = onOpenApp,
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = AccentSuccess)
+          ) {
+            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(15.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("開く", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+          }
+
+          OutlinedButton(
+            onClick = onUninstallApp,
+            modifier = Modifier.weight(0.9f),
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentDanger)
+          ) {
+            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(15.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("削除", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+          }
+        }
+      } else {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-          Icon(
-            imageVector = if (item.isUpdateAvailable) Icons.Default.SystemUpdate else Icons.Default.CloudDownload,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp)
-          )
-          Spacer(modifier = Modifier.width(6.dp))
-          Text(
-            text = when {
-              item.isUpdateAvailable -> "更新 (${(item.sizeBytes / 1024 / 1024).coerceAtLeast(1)}MB)"
-              item.isInstalled -> "再導入"
-              else -> "入手 (${(item.sizeBytes / 1024 / 1024).coerceAtLeast(1)}MB)"
-            },
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold
-          )
+          OutlinedButton(
+            onClick = onOpenDetail,
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(10.dp)
+          ) {
+            Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("専用ページ・詳細", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+          }
+
+          Button(
+            onClick = onDownload,
+            modifier = Modifier.weight(1.3f),
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.buttonColors(
+              containerColor = if (item.isUpdateAvailable) AccentWarning else TechPrimary
+            )
+          ) {
+            Icon(
+              imageVector = if (item.isUpdateAvailable) Icons.Default.SystemUpdate else Icons.Default.CloudDownload,
+              contentDescription = null,
+              modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+              text = when {
+                item.isUpdateAvailable -> "更新 (${(item.sizeBytes / 1024 / 1024).coerceAtLeast(1)}MB)"
+                else -> "入手 (${(item.sizeBytes / 1024 / 1024).coerceAtLeast(1)}MB)"
+              },
+              fontSize = 12.sp,
+              fontWeight = FontWeight.Bold
+            )
+          }
         }
       }
     }
@@ -608,7 +569,7 @@ fun StoreAppCard(
 }
 
 /**
- * Full Dedicated Store App Detail Page (accessible by tapping any app or via `hpjominii://store/app?...` deep link).
+ * Full Dedicated Store App Detail Page.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -616,20 +577,13 @@ fun StoreAppDetailScreen(
   item: StoreAppItem,
   downloadProgress: com.example.store.DownloadProgress?,
   onBack: () -> Unit,
-  onDownloadVersion: (String?) -> Unit
+  onDownloadVersion: (String?) -> Unit,
+  onOpenApp: () -> Unit,
+  onUninstallApp: () -> Unit
 ) {
   BackHandler { onBack() }
   val context = LocalContext.current
   val scrollState = rememberScrollState()
-
-  val deepLinkUrl = remember(item) {
-    val encodedName = Uri.encode(item.name)
-    val encodedPkg = Uri.encode(item.packageName)
-    val encodedVer = Uri.encode(item.latestVersion)
-    val encodedApk = Uri.encode(item.downloadUrl)
-    val encodedRepo = Uri.encode(item.githubRepo ?: "")
-    "hpjominii://store/app?id=${item.id}&name=$encodedName&pkg=$encodedPkg&version=$encodedVer&github=$encodedRepo&apk=$encodedApk"
-  }
 
   Column(
     modifier = Modifier
@@ -664,15 +618,6 @@ fun StoreAppDetailScreen(
             color = TechPrimary
           )
         }
-      }
-
-      IconButton(
-        onClick = {
-          val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-          clipboard.setPrimaryClip(ClipData.newPlainText("App DeepLink", deepLinkUrl))
-        }
-      ) {
-        Icon(Icons.Default.Share, contentDescription = "hpjominiiリンクをコピー", tint = TechPrimary)
       }
     }
 
@@ -763,29 +708,77 @@ fun StoreAppDetailScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        Button(
-          onClick = { onDownloadVersion(null) },
-          enabled = item.downloadUrl.isNotBlank(),
-          modifier = Modifier
-            .fillMaxWidth()
-            .height(50.dp)
-            .testTag("detail_install_button"),
-          shape = RoundedCornerShape(14.dp),
-          colors = ButtonDefaults.buttonColors(
-            containerColor = if (item.isUpdateAvailable) AccentWarning else TechPrimary
-          )
-        ) {
-          Icon(Icons.Default.CloudDownload, contentDescription = null)
-          Spacer(modifier = Modifier.width(8.dp))
-          Text(
-            text = when {
-              item.isUpdateAvailable -> "最新版 (${item.latestVersion}) へアップデート"
-              item.isInstalled -> "再ダウンロード＆インストール (${item.latestVersion})"
-              else -> "ダウンロード＆インストール (${item.latestVersion})"
-            },
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold
-          )
+        if (item.isInstalled) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            Button(
+              onClick = { onDownloadVersion(null) },
+              modifier = Modifier
+                .weight(1.2f)
+                .height(48.dp)
+                .testTag("detail_reinstall_button"),
+              shape = RoundedCornerShape(12.dp),
+              colors = ButtonDefaults.buttonColors(containerColor = TechPrimary)
+            ) {
+              Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+              Spacer(modifier = Modifier.width(4.dp))
+              Text("再インストール", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+
+            Button(
+              onClick = onOpenApp,
+              modifier = Modifier
+                .weight(1f)
+                .height(48.dp)
+                .testTag("detail_open_button"),
+              shape = RoundedCornerShape(12.dp),
+              colors = ButtonDefaults.buttonColors(containerColor = AccentSuccess)
+            ) {
+              Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+              Spacer(modifier = Modifier.width(4.dp))
+              Text("開く", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+
+            OutlinedButton(
+              onClick = onUninstallApp,
+              modifier = Modifier
+                .weight(0.9f)
+                .height(48.dp)
+                .testTag("detail_delete_button"),
+              shape = RoundedCornerShape(12.dp),
+              colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentDanger)
+            ) {
+              Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+              Spacer(modifier = Modifier.width(4.dp))
+              Text("削除", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+          }
+        } else {
+          Button(
+            onClick = { onDownloadVersion(null) },
+            enabled = item.downloadUrl.isNotBlank(),
+            modifier = Modifier
+              .fillMaxWidth()
+              .height(50.dp)
+              .testTag("detail_install_button"),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(
+              containerColor = if (item.isUpdateAvailable) AccentWarning else TechPrimary
+            )
+          ) {
+            Icon(Icons.Default.CloudDownload, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+              text = when {
+                item.isUpdateAvailable -> "最新版 (${item.latestVersion}) へアップデート"
+                else -> "ダウンロード＆インストール (${item.latestVersion})"
+              },
+              fontSize = 14.sp,
+              fontWeight = FontWeight.Bold
+            )
+          }
         }
 
         // External Links Row
@@ -940,52 +933,6 @@ fun StoreAppDetailScreen(
                   Text("この版を導入", fontSize = 11.sp)
                 }
               }
-            }
-          }
-        }
-      }
-    }
-
-    // DeepLink Share Card (works even without repository added)
-    Card(
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(horizontal = 20.dp, vertical = 6.dp),
-      shape = RoundedCornerShape(18.dp),
-      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-      Column(modifier = Modifier.padding(18.dp)) {
-        Text(
-          text = "hpjominii:// 専用ディープリンク (リポジトリ未登録端末でも共有可能)",
-          fontSize = 12.sp,
-          fontWeight = FontWeight.Bold,
-          color = TechPrimary
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        Surface(
-          shape = RoundedCornerShape(8.dp),
-          color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-          modifier = Modifier.fillMaxWidth()
-        ) {
-          Row(
-            modifier = Modifier.padding(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-          ) {
-            Text(
-              text = deepLinkUrl,
-              fontSize = 10.sp,
-              fontFamily = JetBrainsMono,
-              maxLines = 2,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.weight(1f)
-            )
-            IconButton(
-              onClick = {
-                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("hpjominii link", deepLinkUrl))
-              }
-            ) {
-              Icon(Icons.Default.ContentCopy, contentDescription = "コピー", tint = TechPrimary)
             }
           }
         }

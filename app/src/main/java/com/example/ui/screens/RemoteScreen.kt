@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.ContentCopy
@@ -37,7 +38,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -78,8 +78,8 @@ fun RemoteScreen(
   val scrollState = rememberScrollState()
 
   var portInput by remember(serverStatus.port) { mutableStateOf(serverStatus.port.toString()) }
-  var cfTokenInput by remember { mutableStateOf(serverStatus.cfTunnelToken) }
-  var cfCustomHostInput by remember { mutableStateOf("") }
+  var cfTokenInput by remember(serverStatus.cfTunnelToken) { mutableStateOf(serverStatus.cfTunnelToken) }
+  var cfCustomHostInput by remember(serverStatus.cfCustomHost) { mutableStateOf(serverStatus.cfCustomHost) }
 
   Column(
     modifier = modifier
@@ -88,8 +88,8 @@ fun RemoteScreen(
       .padding(bottom = 32.dp)
   ) {
     AppHeader(
-      title = "PC遠隔インストール",
-      subtitle = "全NICバインド (0.0.0.0)・任意ポート変更・Cloudflare Tunnel 対応",
+      title = "PC遠隔操作＆インストール",
+      subtitle = "任意ポート変更・遠隔アプリ/権限管理・設定永続化・CF Tunnel 対応",
       isRooted = optState.isRooted
     )
 
@@ -164,7 +164,7 @@ fun RemoteScreen(
           OutlinedTextField(
             value = portInput,
             onValueChange = { portInput = it.filter { ch -> ch.isDigit() }.take(5) },
-            label = { Text("リスニングポート番号 (1024〜65535)", fontSize = 11.sp) },
+            label = { Text("リスニングポート番号 (1024〜65535・自動保存)", fontSize = 11.sp) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             leadingIcon = { Icon(Icons.Default.SettingsEthernet, contentDescription = null) },
             modifier = Modifier
@@ -232,7 +232,6 @@ fun RemoteScreen(
               }
             }
 
-            // All Candidate Local Network IPs (prevents unreachable IP issues across hotspots/tethering/VPN)
             if (serverStatus.allIpAddresses.size > 1) {
               Spacer(modifier = Modifier.height(10.dp))
               Text(
@@ -302,6 +301,97 @@ fun RemoteScreen(
       }
     }
 
+    // Remote Control Permissions & Persistent Settings Card
+    Card(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 20.dp, vertical = 8.dp)
+        .testTag("remote_permissions_card"),
+      shape = RoundedCornerShape(20.dp),
+      colors = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.surface
+      )
+    ) {
+      Column(modifier = Modifier.padding(20.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Box(
+            modifier = Modifier
+              .size(44.dp)
+              .clip(CircleShape)
+              .background(TechPrimary.copy(alpha = 0.15f)),
+            contentAlignment = Alignment.Center
+          ) {
+            Icon(Icons.Default.AdminPanelSettings, contentDescription = null, tint = TechPrimary, modifier = Modifier.size(24.dp))
+          }
+          Spacer(modifier = Modifier.width(12.dp))
+          Column {
+            Text(
+              text = "遠隔操作権限＆次回起動時の設定維持",
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold
+            )
+            Text(
+              text = "有効化した遠隔操作権限・ポート・設定は次回アプリ起動時にも自動的に維持されます",
+              fontSize = 11.sp,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        RemotePermissionToggleRow(
+          title = "次回起動時に遠隔サーバーを自動開始",
+          subtitle = "アプリを開いた際に前回のポート設定で自動的にサーバーを起動します",
+          checked = serverStatus.autoStartOnLaunch,
+          onCheckedChange = { viewModel.setRemoteAutoStart(it) },
+          tag = "remote_auto_start_switch"
+        )
+
+        RemotePermissionToggleRow(
+          title = "遠隔からのアプリ管理・情報編集・APK抽出を許可",
+          subtitle = "PCブラウザから端末内アプリの一覧、起動、削除、名前/バンドル名変更、APK抽出を行えます",
+          checked = serverStatus.allowRemoteAppManagement,
+          onCheckedChange = {
+            viewModel.setRemotePermissions(
+              allowAppManagement = it,
+              allowPermissionEdit = serverStatus.allowRemotePermissionEdit,
+              allowUrlInstall = serverStatus.allowRemoteUrlInstall
+            )
+          },
+          tag = "remote_allow_app_mgmt_switch"
+        )
+
+        RemotePermissionToggleRow(
+          title = "遠隔からの権限編集 (Grant/Revoke)＆キャッシュ消去を許可",
+          subtitle = "PCブラウザから各アプリの権限許可/拒否の切り替えやシステムキャッシュ消去を行えます",
+          checked = serverStatus.allowRemotePermissionEdit,
+          onCheckedChange = {
+            viewModel.setRemotePermissions(
+              allowAppManagement = serverStatus.allowRemoteAppManagement,
+              allowPermissionEdit = it,
+              allowUrlInstall = serverStatus.allowRemoteUrlInstall
+            )
+          },
+          tag = "remote_allow_perm_edit_switch"
+        )
+
+        RemotePermissionToggleRow(
+          title = "遠隔からのパッケージ・直リンクURL導入を許可",
+          subtitle = "PCブラウザからのファイルアップロードおよび直リンクURL指定による導入を許可します",
+          checked = serverStatus.allowRemoteUrlInstall,
+          onCheckedChange = {
+            viewModel.setRemotePermissions(
+              allowAppManagement = serverStatus.allowRemoteAppManagement,
+              allowPermissionEdit = serverStatus.allowRemotePermissionEdit,
+              allowUrlInstall = it
+            )
+          },
+          tag = "remote_allow_url_install_switch"
+        )
+      }
+    }
+
     // Cloudflare Tunnel (CF Tunnel) Integration Card (Copyright & License Compliant)
     Card(
       modifier = Modifier
@@ -342,7 +432,7 @@ fun RemoteScreen(
                 fontWeight = FontWeight.Bold
               )
               Text(
-                text = "外出先・別ネットワークからHTTPS経由で安全に遠隔導入",
+                text = "外出先・別ネットワークからHTTPS経由で安全に遠隔管理",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
               )
@@ -369,8 +459,11 @@ fun RemoteScreen(
 
         OutlinedTextField(
           value = cfCustomHostInput,
-          onValueChange = { cfCustomHostInput = it },
-          label = { Text("公開トンネルURL / カスタムドメイン (任意)", fontSize = 11.sp) },
+          onValueChange = {
+            cfCustomHostInput = it
+            viewModel.setCfCustomHost(it)
+          },
+          label = { Text("公開トンネルURL / カスタムドメイン (自動保存・任意)", fontSize = 11.sp) },
           placeholder = { Text("https://omni.your-domain.com", fontSize = 12.sp) },
           modifier = Modifier.fillMaxWidth(),
           shape = RoundedCornerShape(12.dp),
@@ -385,7 +478,7 @@ fun RemoteScreen(
             cfTokenInput = it
             viewModel.setCfTunnelToken(it)
           },
-          label = { Text("Cloudflare Zero Trust Tunnel Token (cloudflared 導入時・任意)", fontSize = 11.sp) },
+          label = { Text("Cloudflare Zero Trust Tunnel Token (自動保存・任意)", fontSize = 11.sp) },
           placeholder = { Text("eyJhIjoi...", fontSize = 12.sp) },
           modifier = Modifier.fillMaxWidth(),
           shape = RoundedCornerShape(12.dp),
@@ -506,7 +599,7 @@ fun RemoteScreen(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-              text = "【著作権・ライセンス表記】Cloudflare® は Cloudflare, Inc. の登録商標です。cloudflared クライアントは Cloudflare, Inc. より Apache License 2.0 の下で公開されているオープンソースソフトウェアです。本アプリ (OmniInstaller by Hikaproj) は、許諾なきプロプライエタリバイナリの同梱・再配布を行わず、標準HTTPリバースプロキシ仕様およびユーザー環境 (Termux / システム PATH) の cloudflared プロセス連携によってライセンスを完全遵守しています。",
+              text = "【著作権・ライセンス表記】Cloudflare® は Cloudflare, Inc. の登録商標です。cloudflared クライアントは Cloudflare, Inc. より Apache License 2.0 の下で公開されているオープンソースソフトウェアです。本アプリは許諾なきプロプライエタリバイナリの同梱・再配布を行わず、標準HTTPリバースプロキシ仕様およびユーザー環境 (Termux / システム PATH) の cloudflared プロセス連携によってライセンスを遵守しています。",
               fontSize = 10.sp,
               lineHeight = 14.sp,
               color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -580,6 +673,55 @@ fun RemoteScreen(
           }
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun RemotePermissionToggleRow(
+  title: String,
+  subtitle: String,
+  checked: Boolean,
+  onCheckedChange: (Boolean) -> Unit,
+  tag: String
+) {
+  Surface(
+    shape = RoundedCornerShape(12.dp),
+    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(vertical = 4.dp)
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 12.dp, vertical = 10.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+        Text(
+          text = title,
+          fontSize = 13.sp,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+          text = subtitle,
+          fontSize = 10.sp,
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+      }
+
+      Switch(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        modifier = Modifier.testTag(tag),
+        colors = SwitchDefaults.colors(
+          checkedThumbColor = Color.White,
+          checkedTrackColor = TechPrimary
+        )
+      )
     }
   }
 }
